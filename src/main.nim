@@ -2,7 +2,7 @@ import sokol/log as slog
 import sokol/app as sapp
 import sokol/gfx as sg
 import sokol/glue as sglue
-import shaders/texcube as shd
+import shaders/default as shd
 import math/vec3
 import math/mat4
 

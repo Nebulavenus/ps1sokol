@@ -21,6 +21,7 @@ import strformat
 let shaders = [
     "cube",
     "texcube",
+    "default"
 ]
 
 proc compilerSwitch(): string =
