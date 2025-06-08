@@ -2,7 +2,7 @@ import sokol/log as slog
 import sokol/app as sapp
 import sokol/gfx as sg
 import sokol/glue as sglue
-import shaders/cube as shd
+import shaders/texcube as shd
 import math/vec3
 import math/mat4
 
@@ -16,10 +16,15 @@ const
     colors: [
       ColorAttachmentAction(
         loadAction: loadActionClear,
-        clearValue: (0.5, 0.5, 0.5, 1)
+        clearValue: (0.25, 0.5, 0.75, 1)
       )
     ]
   )
+
+type Vertex = object
+  x, y, z: float32
+  color: uint32
+  u, v: uint16
 
 proc init() {.cdecl.} =
   sg.setup(sg.Desc(
@@ -32,38 +37,38 @@ proc init() {.cdecl.} =
     of backendMetalMacos: echo "using Metal backend"
     else: echo "using untested backend"
 
-  # create vertex buffer for a cube
+  #[
+    Cube vertex buffer with packed vertex formats for color and texture coords.
+    Note that a vertex format which must be portable across all
+    backends must only use the normalized integer formats
+    (BYTE4N, UBYTE4N, SHORT2N, SHORT4N), which can be converted
+    to floating point formats in the vertex shader inputs.
+  ]#
   const vertices = [
-    # position             color0
-    -1.0'f32, -1.0, -1.0,  1.0, 0.0, 0.0, 1.0,
-     1.0, -1.0, -1.0,      1.0, 0.0, 0.0, 1.0,
-     1.0,  1.0, -1.0,      1.0, 0.0, 0.0, 1.0,
-    -1.0,  1.0, -1.0,      1.0, 0.0, 0.0, 1.0,
-
-    -1.0, -1.0,  1.0,      0.0, 1.0, 0.0, 1.0,
-     1.0, -1.0,  1.0,      0.0, 1.0, 0.0, 1.0,
-     1.0,  1.0,  1.0,      0.0, 1.0, 0.0, 1.0,
-    -1.0,  1.0,  1.0,      0.0, 1.0, 0.0, 1.0,
-
-    -1.0, -1.0, -1.0,      0.0, 0.0, 1.0, 1.0,
-    -1.0,  1.0, -1.0,      0.0, 0.0, 1.0, 1.0,
-    -1.0,  1.0,  1.0,      0.0, 0.0, 1.0, 1.0,
-    -1.0, -1.0,  1.0,      0.0, 0.0, 1.0, 1.0,
-
-     1.0, -1.0, -1.0,      1.0, 0.5, 0.0, 1.0,
-     1.0,  1.0, -1.0,      1.0, 0.5, 0.0, 1.0,
-     1.0,  1.0,  1.0,      1.0, 0.5, 0.0, 1.0,
-     1.0, -1.0,  1.0,      1.0, 0.5, 0.0, 1.0,
-
-    -1.0, -1.0, -1.0,      0.0, 0.5, 1.0, 1.0,
-    -1.0, -1.0,  1.0,      0.0, 0.5, 1.0, 1.0,
-     1.0, -1.0,  1.0,      0.0, 0.5, 1.0, 1.0,
-     1.0, -1.0, -1.0,      0.0, 0.5, 1.0, 1.0,
-
-    -1.0,  1.0, -1.0,      1.0, 0.0, 0.5, 1.0,
-    -1.0,  1.0,  1.0,      1.0, 0.0, 0.5, 1.0,
-     1.0,  1.0,  1.0,      1.0, 0.0, 0.5, 1.0,
-     1.0,  1.0, -1.0,      1.0, 0.0, 0.5, 1.0,
+    Vertex( x: -1.0, y: -1.0, z: -1.0,  color: 0xFF0000FF'u32, u:     0, v:     0 ),
+    Vertex( x:  1.0, y: -1.0, z: -1.0,  color: 0xFF0000FF'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z: -1.0,  color: 0xFF0000FF'u32, u: 32767, v: 32767 ),
+    Vertex( x: -1.0, y:  1.0, z: -1.0,  color: 0xFF0000FF'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z:  1.0,  color: 0xFF00FF00'u32, u:     0, v:     0 ),
+    Vertex( x:  1.0, y: -1.0, z:  1.0,  color: 0xFF00FF00'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z:  1.0,  color: 0xFF00FF00'u32, u: 32767, v: 32767 ),
+    Vertex( x: -1.0, y:  1.0, z:  1.0,  color: 0xFF00FF00'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z: -1.0,  color: 0xFFFF0000'u32, u:     0, v:     0 ),
+    Vertex( x: -1.0, y:  1.0, z: -1.0,  color: 0xFFFF0000'u32, u: 32767, v:     0 ),
+    Vertex( x: -1.0, y:  1.0, z:  1.0,  color: 0xFFFF0000'u32, u: 32767, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z:  1.0,  color: 0xFFFF0000'u32, u:     0, v: 32767 ),
+    Vertex( x:  1.0, y: -1.0, z: -1.0,  color: 0xFFFF007F'u32, u:     0, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z: -1.0,  color: 0xFFFF007F'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z:  1.0,  color: 0xFFFF007F'u32, u: 32767, v: 32767 ),
+    Vertex( x:  1.0, y: -1.0, z:  1.0,  color: 0xFFFF007F'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z: -1.0,  color: 0xFFFF7F00'u32, u:     0, v:     0 ),
+    Vertex( x: -1.0, y: -1.0, z:  1.0,  color: 0xFFFF7F00'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y: -1.0, z:  1.0,  color: 0xFFFF7F00'u32, u: 32767, v: 32767 ),
+    Vertex( x:  1.0, y: -1.0, z: -1.0,  color: 0xFFFF7F00'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y:  1.0, z: -1.0,  color: 0xFF007FFF'u32, u:     0, v:     0 ),
+    Vertex( x: -1.0, y:  1.0, z:  1.0,  color: 0xFF007FFF'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z:  1.0,  color: 0xFF007FFF'u32, u: 32767, v: 32767 ),
+    Vertex( x:  1.0, y:  1.0, z: -1.0,  color: 0xFF007FFF'u32, u:     0, v: 32767 ),
   ]
   let vbuf = sg.makeBuffer(BufferDesc(
     usage: BufferUsage(vertexBuffer: true),
@@ -84,16 +89,37 @@ proc init() {.cdecl.} =
     data: sg.Range(addr: indices.addr, size: indices.sizeof)
   ))
 
+  # create a checker board texture
+  let pixels = [
+    0xFFFFFFFF'u32, 0xFF000000'u32, 0xFFFFFFFF'u32, 0xFF000000'u32,
+    0xFF000000'u32, 0xFFFFFFFF'u32, 0xFF000000'u32, 0xFFFFFFFF'u32,
+    0xFFFFFFFF'u32, 0xFF000000'u32, 0xFFFFFFFF'u32, 0xFF000000'u32,
+    0xFF000000'u32, 0xFFFFFFFF'u32, 0xFF000000'u32, 0xFFFFFFFF'u32,
+  ]
+  #bindings.images[shd.imgTex] = sg.makeImage(sg.ImageDesc(
+  let texcubeImg = sg.makeImage(sg.ImageDesc(
+    width: 4,
+    height: 4,
+    data: ImageData(
+      subimage: [ [ sg.Range(addr: pixels.addr, size: pixels.sizeof) ] ]
+    )
+  ))
+
+  # create a matching sampler
+  #bindings.samplers[shd.smpSmp] = sg.makeSampler(sg.SamplerDesc(
+  let texcubeSmp = sg.makeSampler(sg.SamplerDesc(
+    minFilter: filterNearest,
+    magFilter: filterNearest,
+  ));
+
   # create shader and pipeline object
   pip = sg.makePipeline(PipelineDesc(
-    shader: sg.makeShader(shd.cubeShaderDesc(sg.queryBackend())),
+    shader: sg.makeShader(shd.texcubeShaderDesc(sg.queryBackend())),
     layout: VertexLayoutState(
-      buffers: [
-        VertexBufferLayoutState(stride: 28),
-      ],
       attrs: [
-        VertexAttrState(bufferIndex: 0, offset: 0, format: vertexFormatFloat3),
-        VertexAttrState(bufferIndex: 0, offset: 12, format: vertexFormatFloat4),
+        VertexAttrState(format: vertexFormatFloat3),  # position
+        VertexAttrState(format: vertexFormatUbyte4n), # color0
+        VertexAttrState(format: vertexFormatShort2n), # texcoord0
       ],
     ),
     indexType: indexTypeUint16,
@@ -103,8 +129,10 @@ proc init() {.cdecl.} =
       writeEnabled: true,
     )
   ))
-
+  # save everything in bindings
   bindings = Bindings(vertexBuffers: [vbuf], indexbuffer: ibuf)
+  bindings.images[shd.imgTex] = texcubeImg
+  bindings.samplers[shd.smpSmp] = texcubeSmp
 
 proc computeVsParams(): shd.VsParams =
   let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 10.0f)

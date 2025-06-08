@@ -19,7 +19,8 @@ requires "sokol"
 import strformat
 
 let shaders = [
-    "cube"
+    "cube",
+    "texcube",
 ]
 
 proc compilerSwitch(): string =
@@ -55,7 +56,7 @@ task shaders, "Compile all shaders (launched from tools/sokol-tools-bin)":
     else:
       &"{binDir}linux/sokol-shdc"
   for shader in shaders:
-    let cmd = &"{shdcPath} -i src/shaders/{shader}.glsl -o src/shaders/{shader}.nim -l glsl430:metal_macos:hlsl4 -f sokol_nim"
+    let cmd = &"{shdcPath} -i src/shaders/{shader}.glsl -o src/shaders/{shader}.nim -l glsl430:metal_macos:hlsl5:glsl300es -f sokol_nim"
     echo &"   {cmd}"
     exec cmd
 
