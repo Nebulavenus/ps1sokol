@@ -3,26 +3,40 @@ import sokol/app as sapp
 import sokol/gfx as sg
 import sokol/glue as sglue
 import shaders/default as shd
+import math/vec2
 import math/vec3
 import math/mat4
+import math
 
-var
-  rx, ry: float32
-  pip: Pipeline
+type Mesh = object
   bindings: Bindings
+  indexCount: int
+
+type State = object
+  pip: Pipeline
+  passAction: sg.PassAction
+  mesh: Mesh
+  camTime: float32
+  camPos: Vec3
+  vsParams: VSParams
+  fsParams: FSParams
+  rx, ry: float32
+
+var state: State
 
 const
   passAction = PassAction(
     colors: [
       ColorAttachmentAction(
         loadAction: loadActionClear,
-        clearValue: (0.25, 0.5, 0.75, 1)
+        clearValue: (0.25, 0.5, 0.75, 1) # same for fog color
       )
     ]
   )
 
 type Vertex = object
   x, y, z: float32
+  xN, yN, zN: float32
   color: uint32
   u, v: uint16
 
@@ -45,30 +59,30 @@ proc init() {.cdecl.} =
     to floating point formats in the vertex shader inputs.
   ]#
   const vertices = [
-    Vertex( x: -1.0, y: -1.0, z: -1.0,  color: 0xFF0000FF'u32, u:     0, v:     0 ),
-    Vertex( x:  1.0, y: -1.0, z: -1.0,  color: 0xFF0000FF'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z: -1.0,  color: 0xFF0000FF'u32, u: 32767, v: 32767 ),
-    Vertex( x: -1.0, y:  1.0, z: -1.0,  color: 0xFF0000FF'u32, u:     0, v: 32767 ),
-    Vertex( x: -1.0, y: -1.0, z:  1.0,  color: 0xFF00FF00'u32, u:     0, v:     0 ),
-    Vertex( x:  1.0, y: -1.0, z:  1.0,  color: 0xFF00FF00'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z:  1.0,  color: 0xFF00FF00'u32, u: 32767, v: 32767 ),
-    Vertex( x: -1.0, y:  1.0, z:  1.0,  color: 0xFF00FF00'u32, u:     0, v: 32767 ),
-    Vertex( x: -1.0, y: -1.0, z: -1.0,  color: 0xFFFF0000'u32, u:     0, v:     0 ),
-    Vertex( x: -1.0, y:  1.0, z: -1.0,  color: 0xFFFF0000'u32, u: 32767, v:     0 ),
-    Vertex( x: -1.0, y:  1.0, z:  1.0,  color: 0xFFFF0000'u32, u: 32767, v: 32767 ),
-    Vertex( x: -1.0, y: -1.0, z:  1.0,  color: 0xFFFF0000'u32, u:     0, v: 32767 ),
-    Vertex( x:  1.0, y: -1.0, z: -1.0,  color: 0xFFFF007F'u32, u:     0, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z: -1.0,  color: 0xFFFF007F'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z:  1.0,  color: 0xFFFF007F'u32, u: 32767, v: 32767 ),
-    Vertex( x:  1.0, y: -1.0, z:  1.0,  color: 0xFFFF007F'u32, u:     0, v: 32767 ),
-    Vertex( x: -1.0, y: -1.0, z: -1.0,  color: 0xFFFF7F00'u32, u:     0, v:     0 ),
-    Vertex( x: -1.0, y: -1.0, z:  1.0,  color: 0xFFFF7F00'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y: -1.0, z:  1.0,  color: 0xFFFF7F00'u32, u: 32767, v: 32767 ),
-    Vertex( x:  1.0, y: -1.0, z: -1.0,  color: 0xFFFF7F00'u32, u:     0, v: 32767 ),
-    Vertex( x: -1.0, y:  1.0, z: -1.0,  color: 0xFF007FFF'u32, u:     0, v:     0 ),
-    Vertex( x: -1.0, y:  1.0, z:  1.0,  color: 0xFF007FFF'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z:  1.0,  color: 0xFF007FFF'u32, u: 32767, v: 32767 ),
-    Vertex( x:  1.0, y:  1.0, z: -1.0,  color: 0xFF007FFF'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u:     0, v:     0 ),
+    Vertex( x:  1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u: 32767, v: 32767 ),
+    Vertex( x: -1.0, y:  1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z:  1.0,  xN: 0.0, yN: 0.0, zN: 1.0,  color: 0xFF00FF00'u32, u:     0, v:     0 ),
+    Vertex( x:  1.0, y: -1.0, z:  1.0,  xN: 0.0, yN: 0.0, zN: 1.0,  color: 0xFF00FF00'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z:  1.0,  xN: 0.0, yN: 0.0, zN: 1.0,  color: 0xFF00FF00'u32, u: 32767, v: 32767 ),
+    Vertex( x: -1.0, y:  1.0, z:  1.0,  xN: 0.0, yN: 0.0, zN: 1.0,  color: 0xFF00FF00'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z: -1.0,  xN: -1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF0000'u32, u:     0, v:     0 ),
+    Vertex( x: -1.0, y:  1.0, z: -1.0,  xN: -1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF0000'u32, u: 32767, v:     0 ),
+    Vertex( x: -1.0, y:  1.0, z:  1.0,  xN: -1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF0000'u32, u: 32767, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z:  1.0,  xN: -1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF0000'u32, u:     0, v: 32767 ),
+    Vertex( x:  1.0, y: -1.0, z: -1.0,  xN: 1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF007F'u32, u:     0, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z: -1.0,  xN: 1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF007F'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z:  1.0,  xN: 1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF007F'u32, u: 32767, v: 32767 ),
+    Vertex( x:  1.0, y: -1.0, z:  1.0,  xN: 1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF007F'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: -1.0, zN: 0.0,  color: 0xFFFF7F00'u32, u:     0, v:     0 ),
+    Vertex( x: -1.0, y: -1.0, z:  1.0,  xN: 0.0, yN: -1.0, zN: 0.0,  color: 0xFFFF7F00'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y: -1.0, z:  1.0,  xN: 0.0, yN: -1.0, zN: 0.0,  color: 0xFFFF7F00'u32, u: 32767, v: 32767 ),
+    Vertex( x:  1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: -1.0, zN: 0.0,  color: 0xFFFF7F00'u32, u:     0, v: 32767 ),
+    Vertex( x: -1.0, y:  1.0, z: -1.0,  xN: 0.0, yN: 1.0, zN: 0.0,  color: 0xFF007FFF'u32, u:     0, v:     0 ),
+    Vertex( x: -1.0, y:  1.0, z:  1.0,  xN: 0.0, yN: 1.0, zN: 0.0,  color: 0xFF007FFF'u32, u: 32767, v:     0 ),
+    Vertex( x:  1.0, y:  1.0, z:  1.0,  xN: 0.0, yN: 1.0, zN: 0.0,  color: 0xFF007FFF'u32, u: 32767, v: 32767 ),
+    Vertex( x:  1.0, y:  1.0, z: -1.0,  xN: 0.0, yN: 1.0, zN: 0.0,  color: 0xFF007FFF'u32, u:     0, v: 32767 ),
   ]
   let vbuf = sg.makeBuffer(BufferDesc(
     usage: BufferUsage(vertexBuffer: true),
@@ -113,11 +127,12 @@ proc init() {.cdecl.} =
   ));
 
   # create shader and pipeline object
-  pip = sg.makePipeline(PipelineDesc(
+  state.pip = sg.makePipeline(PipelineDesc(
     shader: sg.makeShader(shd.texcubeShaderDesc(sg.queryBackend())),
     layout: VertexLayoutState(
       attrs: [
         VertexAttrState(format: vertexFormatFloat3),  # position
+        VertexAttrState(format: vertexFormatFloat3),  # normal
         VertexAttrState(format: vertexFormatUbyte4n), # color0
         VertexAttrState(format: vertexFormatShort2n), # texcoord0
       ],
@@ -130,29 +145,56 @@ proc init() {.cdecl.} =
     )
   ))
   # save everything in bindings
-  bindings = Bindings(vertexBuffers: [vbuf], indexbuffer: ibuf)
-  bindings.images[shd.imgTex] = texcubeImg
-  bindings.samplers[shd.smpSmp] = texcubeSmp
+  var mesh: Mesh
+  mesh.bindings = Bindings(vertexBuffers: [vbuf], indexbuffer: ibuf)
+  mesh.bindings.images[shd.imgUTexture] = texcubeImg
+  mesh.bindings.samplers[shd.smpUSampler] = texcubeSmp
+  mesh.indexCount = indices.sizeof
+  state.mesh = mesh
 
 proc computeVsParams(): shd.VsParams =
-  let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 10.0f)
-  let view = lookat(vec3(0.0f, 1.5f, 6.0f), vec3.zero(), vec3.up())
-  let rxm = rotate(rx, vec3(1f, 0f, 0f))
-  let rym = rotate(ry, vec3(0f, 1f, 0f))
+  let camStart = vec3(0.0, 2.5, 4.0)
+  let camEnd = vec3(0.0, 0.5, 12.0)
+  let dt = sapp.frameDuration()
+  let speed = 0.3 # cycles per second
+  state.camTime += dt
+  let t = (1.0 + math.sin(2.0 * 3.14159 * speed * state.camTime)) / 2.0 # move sin [-1,1] to [0, 1]
+  let camPos = camStart + (camEnd - camStart) * t
+
+  let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 20.0f)
+  let view = lookat(camPos, vec3.zero(), vec3.up())
+  let rxm = rotate(state.rx, vec3(1f, 0f, 0f))
+  let rym = rotate(state.ry, vec3(0f, 1f, 0f))
   let model = rxm * rym
-  result = VsParams(mvp: proj * view * model)
+  result = shd.VsParams(
+    u_mvp: proj * view * model,
+    u_model: model,
+    u_camPos: camPos,
+    u_jitterAmount: 240.0, # Simulate a 240p vertical resolution
+  )
+
+proc computeFsParams(): shd.FsParams =
+  result = shd.FsParams(
+    u_fogColor: vec3(0.25f, 0.5f, 0.75f),
+    u_fogNear: 4.0f,
+    u_fogFar: 12.0f,
+    #u_ditherSize: vec2(800.0, 600.0)
+    u_ditherSize: vec2(sapp.widthf(), sapp.heightf()),
+  )
 
 proc frame() {.cdecl.} =
   let dt = sapp.frameDuration() * 60f
-  rx += 1f * dt
-  ry += 2f * dt
+  state.rx += 1f * dt
+  state.ry += 2f * dt
 
   let vsParams = computeVsParams()
+  let fsParams = computeFsParams()
 
   sg.beginPass(Pass(action: passAction, swapchain: sglue.swapchain()))
-  sg.applyPipeline(pip)
-  sg.applyBindings(bindings)
+  sg.applyPipeline(state.pip)
+  sg.applyBindings(state.mesh.bindings)
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
+  sg.applyUniforms(shd.ubFsParams, sg.Range(addr: fsParams.addr, size: fsParams.sizeof))
   sg.draw(0, 36, 1)
   sg.endPass()
   sg.commit()
