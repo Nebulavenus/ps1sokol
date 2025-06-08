@@ -55,7 +55,7 @@ void main() {
     // To fake affine mapping, we trick the GPU's perspective-correct interpolator
     // 1. Multiply the UVs by the 'w' component of the vertex's clip-space position
     // 2. Pass this new vec3(u*w, v*w, w) to the fragment shader
-    vec2 uv = a_texcoord0 * 1.0;
+    vec2 uv = a_texcoord0 * 5.0;
     v_affine_uv = vec3(uv * clip_pos.w, clip_pos.w);
 }
 #pragma sokol @end
@@ -84,16 +84,23 @@ const mat4 bayer_matrix = mat4(
         12.0, 4.0, 14.0, 6.0,
         3.0, 11.0, 1.0, 9.0,
         15.0, 7.0, 13.0, 5.0
-    ) / 16.0;
+    );
 
 // PS1 had 15-bit color (32 levels per channel)
 const float colorLevels = 32.0;
 
 vec3 quantize_and_dither(vec3 color, vec2 screen_pos) {
-    // Add dither pattern noise before quantization
-    color += bayer_matrix[int(screen_pos.x) % 4][int(screen_pos.y) % 4];
-    // Quantize color to fewer levels
-    return floor(color * colorLevels) / colorLevels;
+    // 1. Get the dither value from the matrix, normalized to a 0.0-1.0 range.
+    float dither_val = bayer_matrix[int(screen_pos.x) % 4][int(screen_pos.y) % 4] / 16.0;
+
+    // 2. Scale the dither value to the size of one color step.
+    float dither_scaled = dither_val / colorLevels;
+
+    // 3. Add the small, scaled dither bias to the original color.
+    vec3 dithered_color = color + dither_scaled;
+
+    // 4. Now quantize the result.
+    return floor(dithered_color * colorLevels) / colorLevels;
 }
 
 void main() {

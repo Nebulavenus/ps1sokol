@@ -20,8 +20,20 @@ proc up*(): Vec3 =
 proc `+`*(v0: Vec3, v1: Vec3): Vec3 =
   result = Vec3(x: v0.x + v1.x, y: v0.y + v1.y, z: v0.z + v1.z)
 
+proc `+=`*(v0: var Vec3, v1: Vec3) =
+  v0.x += v1.x
+  v0.y += v1.y
+  v0.z += v1.z
+  #result = Vec3(x: v0.x + v1.x, y: v0.y + v1.y, z: v0.z + v1.z)
+
 proc `-`*(v0: Vec3, v1: Vec3): Vec3 =
   result = Vec3(x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z)
+
+proc `-=`*(v0: var Vec3, v1: Vec3) =
+  v0.x -= v1.x
+  v0.y -= v1.y
+  v0.z -= v1.z
+  #result = Vec3(x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z)
 
 proc `*`*(v0: Vec3, s: float32): Vec3 =
   result = Vec3(x: v0.x * s, y: v0.y * s, z: v0.z * s)

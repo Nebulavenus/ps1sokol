@@ -18,6 +18,7 @@ type State = object
   mesh: Mesh
   camTime: float32
   camPos: Vec3
+  camAngle: float32
   vsParams: VSParams
   fsParams: FSParams
   rx, ry: float32
@@ -153,8 +154,8 @@ proc init() {.cdecl.} =
   state.mesh = mesh
 
 proc computeVsParams(): shd.VsParams =
-  let camStart = vec3(0.0, 2.5, 4.0)
-  let camEnd = vec3(0.0, 0.5, 12.0)
+  let camStart = state.camPos + vec3(0.0, 2.5, 4.0)
+  let camEnd = state.camPos + vec3(0.0, 0.5, 12.0)
   let dt = sapp.frameDuration()
   let speed = 0.3 # cycles per second
   state.camTime += dt
@@ -162,7 +163,10 @@ proc computeVsParams(): shd.VsParams =
   let camPos = camStart + (camEnd - camStart) * t
 
   let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 20.0f)
-  let view = lookat(camPos, vec3.zero(), vec3.up())
+
+  let lookAtPoint = camPos + vec3(sin(state.camAngle), 0.0, -cos(state.camAngle))
+  let view = lookat(camPos, lookAtPoint, vec3.up())
+
   let rxm = rotate(state.rx, vec3(1f, 0f, 0f))
   let rym = rotate(state.ry, vec3(0f, 1f, 0f))
   let model = rxm * rym
@@ -202,11 +206,36 @@ proc frame() {.cdecl.} =
 proc cleanup() {.cdecl.} =
   sg.shutdown()
 
+proc event(e: ptr sapp.Event) {.cdecl.} =
+  if e.`type` == EventType.eventTypeKeyDown:
+    let moveSpeed = 0.5
+    let rotSpeed = 0.3
+    let forwardVec = vec3(sin(state.camAngle), 0.0, -cos(state.camAngle))
+    let rightVec = vec3(forwardVec.z, 0.0, -forwardVec.x)
+
+    case e.keyCode
+    of keyCodeEscape:
+      sapp.requestQuit()
+    of keyCodeW:
+      state.camPos += (forwardVec * moveSpeed)
+    of keyCodeS:
+      state.camPos -= forwardVec * moveSpeed
+    of keyCodeA:
+      state.camPos -= rightVec * moveSpeed
+    of keyCodeD:
+      state.camPos += rightVec * moveSpeed
+    of keyCodeQ, keyCodeLeft:
+      state.camAngle -= rotSpeed
+    of keyCodeE, keyCodeRight:
+      state.camAngle += rotSpeed
+    else: discard
+
 # main
 
 sapp.run(sapp.Desc(
   initCb: init,
   frameCb: frame,
+  eventCb: event,
   cleanupCb: cleanup,
   windowTitle: "Game",
   width: 640,
