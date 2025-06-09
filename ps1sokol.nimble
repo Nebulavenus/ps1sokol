@@ -39,11 +39,18 @@ proc backendSwitch(): string =
 proc build() =
   exec &"nim c --outdir:build/ {compilerSwitch()} {backendSwitch()} src/main"
 
+proc buildDebug() =
+  exec &"nim c -d:debug --debugger:native --outdir:build/ {compilerSwitch()} {backendSwitch()} src/main"
+
 # Tasks
 
 task convert, "Convert PNG to QOI":
     exec &"nim c --outdir:build/ src/converterqoi"
     exec &"build/converterqoi"
+
+task debuggame, "Debug the game":
+  buildDebug()
+  exec &"build/main"
 
 task game, "Runs the game":
   build()

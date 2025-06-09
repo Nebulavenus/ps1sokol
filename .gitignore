@@ -4,3 +4,4 @@ src/shaders/*.nim
 qoi_tests/
 tests/*.exe
 assets/
+*.pdb

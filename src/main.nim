@@ -6,6 +6,7 @@ import shaders/default as shd
 import math/vec2
 import math/vec3
 import math/mat4
+import qoi
 import math
 import strutils
 import tables
@@ -250,6 +251,56 @@ proc init() {.cdecl.} =
     magFilter: filterNearest,
   ));
 
+  # load qoi texture
+  var qoiImage: QOIF
+  try:
+    qoiImage = readQOI("assets/diffuse.qoi")
+    #qoiImage = readQOI("diffuse.qoi")
+    echo "Success loaded qoi: diffuse.qoi ", qoiImage.header.width, "-", qoiImage.header.height
+    echo "First byte is not null! ", qoiImage.data[160]
+    echo "Data is not null! ", qoiImage.data.len
+  except Exception as e:
+    echo "Error loading qoi"
+    requestQuit()
+
+  var finalPixelData: seq[byte]
+  var finalPixelFormat: sg.PixelFormat
+  #if qoiImage.header.channels == qoi.RGBA:
+    #finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
+    #else:
+  # Conversion required
+  finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
+  let numPixels = qoiImage.header.width.int * qoiImage.header.height.int
+  finalPixelData = newSeq[byte](numPixels * 4)
+  # Write data
+  var srcIndex = 0
+  var dstIndex = 0
+  for i in 0 ..< numPixels:
+    # Copy R, G, B
+    finalPixelData[dstIndex]   = qoiImage.data[srcIndex]     # R
+    finalPixelData[dstIndex+1] = qoiImage.data[srcIndex+1]   # G
+    finalPixelData[dstIndex+2] = qoiImage.data[srcIndex+2]   # B
+    # Add the Alpha channel
+    finalPixelData[dstIndex+3] = 255.byte                   # A (fully opaque)
+
+    srcIndex += 3
+    dstIndex += 4
+
+  let qoiTexture = sg.makeImage(sg.ImageDesc(
+    width: qoiImage.header.width.int32,
+    height: qoiImage.header.height.int32,
+    pixelFormat: finalPixelFormat,
+    data: ImageData(
+      #subimage: [ [ sg.Range(addr: qoiImage.data[0].addr, size: qoiImage.data.sizeof) ] ]
+      #subimage: [ [ sg.Range(addr: qoiImage.data[0].addr, size: 16) ] ]
+      #subimage: [ [ sg.Range(addr: qoiImage.data[0].addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
+      #subimage: [ [ sg.Range(addr: finalPixelData[0].addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
+      #subimage: [ [ sg.Range(addr: finalPixelData.addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
+      subimage: [ [ sg.Range(addr: finalPixelData[0].addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
+      #subimage: [ [ sg.Range(addr: qoiImage.data[0].addr, size: qoiImage.data.sizeof) ] ]
+    )
+  ))
+
   # create shader and pipeline object
   state.pip = sg.makePipeline(PipelineDesc(
     shader: sg.makeShader(shd.texcubeShaderDesc(sg.queryBackend())),
@@ -277,11 +328,12 @@ proc init() {.cdecl.} =
   #state.mesh = mesh
 
   let assetDir = getAppDir() & DirSep
-  #let modelPath = assetDir & "bs_rest.obj"
-  let modelPath = assetDir & "teapot.obj"
+  let modelPath = assetDir & "bs_rest.obj"
+  #let modelPath = assetDir & "teapot.obj"
 
   mesh = loadObj(modelPath)
-  mesh.bindings.images[shd.imgUTexture] = texcubeImg
+  #mesh.bindings.images[shd.imgUTexture] = texcubeImg
+  mesh.bindings.images[shd.imgUTexture] = qoiTexture
   mesh.bindings.samplers[shd.smpUSampler] = texcubeSmp
   state.mesh = mesh
 
