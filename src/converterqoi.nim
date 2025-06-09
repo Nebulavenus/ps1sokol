@@ -37,7 +37,8 @@ for fullPath in walkDir(assetsDir):
 
     let
       #cmd = ["magick", fullPath[1], outputPath]
-      args = ["convert", $fullPath[1], "-colorspace RGBA", $outputPath]
+      #args = ["convert", $fullPath[1], "-colorspace RGBA", $outputPath]
+      args = ["convert", $fullPath[1], "-colorspace RGB", $outputPath]
       # poStdErrToStdOut ensures magick's error messages are visible
       exitCode = execProcess(command = "magick", args = args, options = {poStdErrToStdOut})
 

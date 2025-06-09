@@ -265,26 +265,27 @@ proc init() {.cdecl.} =
 
   var finalPixelData: seq[byte]
   var finalPixelFormat: sg.PixelFormat
-  #if qoiImage.header.channels == qoi.RGBA:
-    #finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
-    #else:
-  # Conversion required
-  finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
-  let numPixels = qoiImage.header.width.int * qoiImage.header.height.int
-  finalPixelData = newSeq[byte](numPixels * 4)
-  # Write data
-  var srcIndex = 0
-  var dstIndex = 0
-  for i in 0 ..< numPixels:
-    # Copy R, G, B
-    finalPixelData[dstIndex]   = qoiImage.data[srcIndex]     # R
-    finalPixelData[dstIndex+1] = qoiImage.data[srcIndex+1]   # G
-    finalPixelData[dstIndex+2] = qoiImage.data[srcIndex+2]   # B
-    # Add the Alpha channel
-    finalPixelData[dstIndex+3] = 255.byte                   # A (fully opaque)
+  if qoiImage.header.channels == qoi.RGBA:
+    finalPixelData = qoiImage.data
+    finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
+  else:
+    # Conversion required
+    finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
+    let numPixels = qoiImage.header.width.int * qoiImage.header.height.int
+    finalPixelData = newSeq[byte](numPixels * 4)
+    # Write data
+    var srcIndex = 0
+    var dstIndex = 0
+    for i in 0 ..< numPixels:
+      # Copy R, G, B
+      finalPixelData[dstIndex]   = qoiImage.data[srcIndex]     # R
+      finalPixelData[dstIndex+1] = qoiImage.data[srcIndex+1]   # G
+      finalPixelData[dstIndex+2] = qoiImage.data[srcIndex+2]   # B
+      # Add the Alpha channel
+      finalPixelData[dstIndex+3] = 255.byte                   # A (fully opaque)
 
-    srcIndex += 3
-    dstIndex += 4
+      srcIndex += 3
+      dstIndex += 4
 
   let qoiTexture = sg.makeImage(sg.ImageDesc(
     width: qoiImage.header.width.int32,
