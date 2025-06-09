@@ -41,6 +41,10 @@ proc build() =
 
 # Tasks
 
+task convert, "Convert PNG to QOI":
+    exec &"nim c --outdir:build/ src/converterqoi"
+    exec &"build/converterqoi"
+
 task game, "Runs the game":
   build()
   exec &"build/main"
