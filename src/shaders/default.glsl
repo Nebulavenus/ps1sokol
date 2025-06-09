@@ -55,8 +55,10 @@ void main() {
     // To fake affine mapping, we trick the GPU's perspective-correct interpolator
     // 1. Multiply the UVs by the 'w' component of the vertex's clip-space position
     // 2. Pass this new vec3(u*w, v*w, w) to the fragment shader
-    vec2 uv = a_texcoord0 * 5.0;
+    //vec2 uv = a_texcoord0 * 5.0;
+    vec2 uv = a_texcoord0;
     v_affine_uv = vec3(uv * clip_pos.w, clip_pos.w);
+    //v_affine_uv = vec3(uv, clip_pos.w);
 }
 #pragma sokol @end
 
@@ -111,7 +113,7 @@ void main() {
     vec2 final_uv = v_affine_uv.xy / v_affine_uv.z;
     // Sample the texture with our wobbly UVs and multiply by the vertex color.
     // The NEAREST filter on the sampler provides the sharp, pixelated look.
-    vec4 tex_color = texture(sampler2D(u_texture, u_sampler), final_uv) * v_color;
+    vec4 tex_color = texture(sampler2D(u_texture, u_sampler), final_uv);
 
     // --- 2. Color Quantization and Dithering ---
     // Combine texture and vertex lighting color
@@ -124,6 +126,9 @@ void main() {
     final_color = mix(final_color, u_fogColor.rgb, fog_factor);
 
     frag_color = vec4(final_color, 1.0);
+
+    // Debug
+    //frag_color = vec4(final_uv.x, final_uv.y, 0.0, 1.0);
 }
 #pragma sokol @end
 

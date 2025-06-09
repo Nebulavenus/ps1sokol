@@ -16,29 +16,41 @@ type Vertex = object
   x, y, z: float32
   xN, yN, zN: float32
   color: uint32
-  u, v: uint16
+  #u, v: uint16
+  u, v: float32
 
 type Mesh = object
   bindings: Bindings
   indexCount: int32
 
-proc vec2ToUV(v: Vec2): (uint16, uint16) =
-  # Define the min and max values for normalization
-  const
-    minX = 0.0
-    maxX = 1.0
-    minY = 0.0
-    maxY = 1.0
+proc vec2ToShort2N(v: Vec2): (int16, int16) =
+  ## Converts a Vec2 float [0.0, 1.0] to two int16s for use with SHORT2N.
 
-  # Normalize the Vec2 values to the range [0, 1]
-  let normalizedX = (v.x - minX) / (maxX - minX)
-  let normalizedY = (v.y - minY) / (maxY - minY)
+  # First, ensure the input is within the expected [0, 1] range. This is robust.
+  let clampedX = clamp(v.x, 0.0, 1.0)
+  let clampedY = clamp(v.y, 0.0, 1.0)
 
-  # Clamp the values to ensure they are within [0, 1]
-  let clampedX = clamp(normalizedX, 0.0, 1.0)
-  let clampedY = clamp(normalizedY, 0.0, 1.0)
+  # --- This is the crucial math ---
+  # 1. Remap the [0, 1] range to the [-1, 1] range.
+  #    (value * 2.0) - 1.0 does this perfectly.
+  let normX = (clampedX * 2.0) - 1.0
+  let normY = (clampedY * 2.0) - 1.0
 
-  # Scale to uint16 range
+  # 2. Scale the [-1, 1] float to the [ -32767, 32767 ] integer range.
+  let shortX = cast[int16](normX * 32767.0)
+  let shortY = cast[int16](normY * 32767.0)
+
+  return (shortX, shortY)
+
+proc vec2ToUshort2n(v: Vec2): (uint16, uint16) =
+  ## Converts a Vec2 float [0.0, 1.0] to two uint16s for use with USHORT2N.
+
+  # Robustly clamp the input to the expected [0, 1] range.
+  let clampedX = clamp(v.x, 0.0, 1.0)
+  let clampedY = clamp(v.y, 0.0, 1.0)
+
+  # --- This is the crucial math ---
+  # Scale the [0, 1] float directly to the [0, 65535] integer range.
   let uvX = cast[uint16](clampedX * 65535.0)
   let uvY = cast[uint16](clampedY * 65535.0)
 
@@ -111,14 +123,17 @@ proc loadObj(path: string): Mesh =
           # Create the vertex, providing defaults for missing data
           let pos = if pos_idx != -1: temp_positions[pos_idx] else: vec3(0,0,0)
           let nrm = if nrm_idx != -1: temp_normals[nrm_idx] else: vec3(0,1,0) # Default normal points up
-          let uv  = if uv_idx != -1: temp_uvs[uv_idx] else: vec2(0,0) # Default UV is 0,0
-          let uvS = vec2ToUV(uv)
+          var uv  = if uv_idx != -1: temp_uvs[uv_idx] else: vec2(0,0) # Default UV is 0,0
+          # Invert uv, modern rendering convention
+          uv.y = 1.0 - uv.y
+          let uvS = vec2ToUshort2N(uv)
           # Obj doesn't store vertex colors... by default white
           let new_vert = Vertex(
             x: pos.x, y: pos.y, z: pos.z,
             xN: nrm.x, yN: nrm.y, zN: nrm.z,
             color: 0xFFFFFFFF'u32,
-            u: uvS[0], v: uvS[1]
+            #u: uvS[0], v: uvS[1]
+            u: uv.x, v: uv.y
           )
           out_vertices.add(new_vert)
           let new_idx = (out_vertices.len - 1).uint16
@@ -183,6 +198,7 @@ proc init() {.cdecl.} =
     (BYTE4N, UBYTE4N, SHORT2N, SHORT4N), which can be converted
     to floating point formats in the vertex shader inputs.
   ]#
+  #[
   const vertices = [
     Vertex( x: -1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u:     0, v:     0 ),
     Vertex( x:  1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u: 32767, v:     0 ),
@@ -227,6 +243,7 @@ proc init() {.cdecl.} =
     usage: BufferUsage(indexBuffer: true),
     data: sg.Range(addr: indices.addr, size: indices.sizeof)
   ))
+  ]#
 
   # create a checker board texture
   let pixels = [
@@ -310,7 +327,8 @@ proc init() {.cdecl.} =
         VertexAttrState(format: vertexFormatFloat3),  # position
         VertexAttrState(format: vertexFormatFloat3),  # normal
         VertexAttrState(format: vertexFormatUbyte4n), # color0
-        VertexAttrState(format: vertexFormatShort2n), # texcoord0
+        #VertexAttrState(format: vertexFormatShort2n), # texcoord0
+        VertexAttrState(format: vertexFormatFloat2), # texcoord0
       ],
     ),
     indexType: indexTypeUint16,
