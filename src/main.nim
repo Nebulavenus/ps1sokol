@@ -265,9 +265,9 @@ proc loadPly(path: string): Mesh =
 
     # UVs (optional)
     let u = getProp("s", 0.0)
-    let v = getProp("t", 0.0)
+    var v = getProp("t", 0.0)
     # Uncomment if textures appear upside down
-    # v = 1.0 - v
+    v = 1.0 - v
 
     # Colors (optional)
     let r = getProp("red", 255.0).uint8
@@ -292,9 +292,12 @@ proc loadPly(path: string): Mesh =
     case numVertsInFace
     of 3: # Triangle
       let i0 = parts[1].parseInt.uint16
-      let i1 = parts[1].parseInt.uint16
-      let i2 = parts[1].parseInt.uint16
-      out_indices.add([i0, i1, i2])
+      let i1 = parts[2].parseInt.uint16
+      let i2 = parts[3].parseInt.uint16
+      # Clockwise order ABC-i0i1i2
+      #out_indices.add([i0, i1, i2])
+      # Counter-clockwise order - that what uses obj right?
+      out_indices.add([i0, i2, i1]) # CBA
     of 4: # Quad - triangulate it
       let i0 = parts[1].parseInt.uint16
       let i1 = parts[2].parseInt.uint16
@@ -360,7 +363,7 @@ proc init() {.cdecl.} =
     of backendMetalMacos: echo "using Metal backend"
     else: echo "using untested backend"
 
-  sapp.lockMouse(true)
+  #sapp.lockMouse(true)
   #[
     Cube vertex buffer with packed vertex formats for color and texture coords.
     Note that a vertex format which must be portable across all
@@ -502,6 +505,7 @@ proc init() {.cdecl.} =
       ],
     ),
     indexType: indexTypeUint16,
+    #faceWinding: faceWindingCcw,
     cullMode: cullModeBack,
     depth: DepthState(
       compare: compareFuncLessEqual,
@@ -518,10 +522,12 @@ proc init() {.cdecl.} =
 
   let assetDir = getAppDir() & DirSep
   #let modelPath = assetDir & "bs_rest.obj"
-  #let modelPath = assetDir & "teapot.obj"
-  let modelPath = assetDir & "bs_rest.ply"
 
+  #let modelPath = assetDir & "teapot.ply"
+  let modelPath = assetDir & "bs_rest.ply"
   mesh = loadPly(modelPath)
+  #let modelPath = assetDir & "bs_rest.obj"
+  #mesh = loadObj(modelPath)
   #mesh.bindings.images[shd.imgUTexture] = texcubeImg
   mesh.bindings.images[shd.imgUTexture] = qoiTexture
   mesh.bindings.samplers[shd.smpUSampler] = texcubeSmp
@@ -537,7 +543,7 @@ proc computeVsParams(): shd.VsParams =
   #let camPos = camStart + (camEnd - camStart) * t
   let camPos = state.camPos
 
-  let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 20.0f)
+  let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 50.0f)
 
   # Calculate the camera's forward direction vector using spherical coordinates
   let forwardVec = norm(vec3(
@@ -555,7 +561,8 @@ proc computeVsParams(): shd.VsParams =
     u_mvp: proj * view * model,
     u_model: model,
     u_camPos: camPos,
-    u_jitterAmount: 240.0, # Simulate a 240p vertical resolution
+    #u_jitterAmount: 240.0, # Simulate a 240p vertical resolution
+    u_jitterAmount: 480.0, # Simulate a 240p vertical resolution
   )
 
 proc computeFsParams(): shd.FsParams =

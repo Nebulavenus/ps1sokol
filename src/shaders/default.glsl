@@ -27,7 +27,7 @@ out vec3 v_affine_uv;
 out float v_dist;
 
 // Simple directional light
-const vec3 lightDir = vec3(0.5, 0.7, 0.8);
+const vec3 lightDir = vec3(0.0, 0.0, -2.0);
 
 void main() {
     // --- 1. Vertex Jitter (GTE Precision Emulation) ---
