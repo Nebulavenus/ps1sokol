@@ -571,7 +571,9 @@ proc computeFsParams(): shd.FsParams =
     u_fogNear: 4.0f,
     u_fogFar: 12.0f,
     #u_ditherSize: vec2(800.0, 600.0)
-    u_ditherSize: vec2(sapp.widthf(), sapp.heightf()),
+    #u_ditherSize: vec2(sapp.widthf(), sapp.heightf()),
+    u_ditherSize: vec2(320.0, 240.0),
+    #u_ditherSize: vec2(50, 50),
   )
 
 proc frame() {.cdecl.} =
@@ -640,7 +642,7 @@ sapp.run(sapp.Desc(
   windowTitle: "Game",
   width: 640,
   height: 480,
-  sampleCount: 4,
+  sampleCount: 0,
   icon: IconDesc(sokol_default: true),
   logger: sapp.Logger(fn: slog.fn)
 ))

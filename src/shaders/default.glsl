@@ -58,7 +58,6 @@ void main() {
     //vec2 uv = a_texcoord0 * 5.0;
     vec2 uv = a_texcoord0;
     v_affine_uv = vec3(uv * clip_pos.w, clip_pos.w);
-    //v_affine_uv = vec3(uv, clip_pos.w);
 }
 #pragma sokol @end
 
@@ -91,17 +90,22 @@ const mat4 bayer_matrix = mat4(
 // PS1 had 15-bit color (32 levels per channel)
 const float colorLevels = 32.0;
 
-vec3 quantize_and_dither(vec3 color, vec2 screen_pos) {
-    // 1. Get the dither value from the matrix, normalized to a 0.0-1.0 range.
-    float dither_val = bayer_matrix[int(screen_pos.x) % 4][int(screen_pos.y) % 4] / 16.0;
+vec3 quantize_and_dither(vec3 color, vec2 screen_pos, vec2 dither_size) {
+    // 1. Calculate the scale factor between the actual screen size and our virtual dither size.
+    // We get the actual screen size from the textureSize of the input uniform (any texture will do).
+    // This is more robust than passing in another uniform.
+    vec2 actual_size = vec2(textureSize(sampler2D(u_texture, u_sampler), 0));
+    vec2 scale_factor = actual_size / dither_size;
 
-    // 2. Scale the dither value to the size of one color step.
+    // 2. Scale the screen coordinates. This makes the dither pattern "chunkier" at high resolutions.
+    vec2 scaled_coords = floor(screen_pos / scale_factor);
+
+    // 3. Get the dither value from the matrix using the SCALED coordinates.
+    float dither_val = bayer_matrix[int(scaled_coords.x) % 4][int(scaled_coords.y) % 4] / 16.0;
+
+    // The rest of the function remains the same...
     float dither_scaled = dither_val / colorLevels;
-
-    // 3. Add the small, scaled dither bias to the original color.
     vec3 dithered_color = color + dither_scaled;
-
-    // 4. Now quantize the result.
     return floor(dithered_color * colorLevels) / colorLevels;
 }
 
@@ -119,7 +123,7 @@ void main() {
     // Combine texture and vertex lighting color
     vec3 final_color = tex_color.rgb * v_color.rgb;
     // Apply the effect
-    final_color = quantize_and_dither(final_color, gl_FragCoord.xy);
+    final_color = quantize_and_dither(final_color, gl_FragCoord.xy, u_ditherSize.xy);
 
     // --- 3. Fog Application ---
     float fog_factor = smoothstep(u_fogNear, u_fogFar, v_dist);
