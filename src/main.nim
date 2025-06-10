@@ -155,6 +155,176 @@ proc loadObj(path: string): Mesh =
   result.indexCount = out_indices.len.int32
   result.bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
 
+proc packColor(r, g, b, a: uint8): uint32 {.inline.} =
+  ## Packs four 8-bit color channels into a single 32-bit integer.
+  ## The byte order (AABBGGRR) is what Sokol's UBYTE4N format expects on little-endian systems
+  ## to correctly map to an RGBA vec4 in the shader.
+  result = (uint32(a) shl 24) or (uint32(b) shl 16) or (uint32(g) shl 8) or uint32(r)
+
+proc loadPly(path: string): Mesh =
+  ## Loads a 3D model from an ASCII PLY file.
+  ##
+  ## Features:
+  ## - Parses vertex properties: x, y, z, nx, ny, nz, s, t (or u, v).
+  ## - Parses vertex colors: red, green, blue, alpha (as uchar).
+  ## - Provides sane defaults for missing properties (normals, uvs, colors).
+  ## - Supports triangular (3) and quadrilateral (4) faces, triangulating quads automatically.
+  ## - Robustly handles any property order in the header.
+
+  var
+    out_vertices: seq[Vertex]
+    out_indices: seq[uint16]
+
+  if not os.fileExists(path):
+    echo "loadPly: Cannot load PLY file, path not found: " & path
+    return
+
+  # --- 1. Header Parsing ---
+  var
+    vertexCount = 0
+    faceCount = 0
+    inHeader = true
+    # Maps property name ("x", "nx") to its column index
+    # as they appear after element order, int stores its column index
+    vertexPropertyMap: Table[string, int]
+    vertexPropertyCount = 0
+    parsingVertex = false
+
+  let fileLines = readFile(path).splitLines()
+  var bodyStartIndex = -1
+
+  for i, line in fileLines:
+    if not inHeader: continue
+
+    let parts = line.split()
+    if parts.len == 0: continue
+
+    case parts[0]
+    of "ply": discard # Standard magic number
+    of "format":
+      if parts.len > 1 and parts[1] == "ascii":
+        echo "Ply is in ASCII format"
+      else:
+        echo "Unsupported or invalid PLY format"
+        return
+    of "comment": discard
+    of "element":
+      parsingVertex = false # Reset state when a new element is found
+      if parts.len == 3 and parts[1] == "vertex":
+        vertexCount = parts[2].parseInt
+        parsingVertex = true
+        vertexPropertyCount = 0
+      elif parts.len == 3 and parts[1] == "face":
+        faceCount = parts[2].parseInt
+    of "property":
+      if parsingVertex and parts.len == 3:
+        # We only care about vertex properties for now
+        var propName = parts[^1]
+        # Allow both "s, t" and "u, v" for texture coords
+        if propName == "u": propName = "s"
+        if propName == "v": propName = "t"
+        vertexPropertyMap[propName] = vertexPropertyCount
+        vertexPropertyCount += 1
+    of "end_header":
+      inHeader = false
+      bodyStartIndex = i + 1
+      break # Exit header parsing loop
+    else: discard
+
+  if bodyStartIndex == -1:
+    echo "loadPly, Failed to parse PLY header"
+    return
+
+  echo "loadPly, Header parsed. Vertices: $1, Faces: $2" % [$vertexCount, $faceCount]
+
+  # --- 2. Body Parsing (Vertices) ---
+  let vertexLinesEnd = bodyStartIndex + vertexCount
+  out_vertices.setLen(vertexCount)
+  for i in bodyStartIndex ..< vertexLinesEnd:
+    let parts = fileLines[i].split()
+    if parts.len != vertexPropertyCount:
+      echo "loadPly, Vertex line has incorrect number of properties, skipping."
+      continue
+
+    # Helper to safely get a property value or a default
+    proc getProp(name: string, default: float): float =
+      if vertexPropertyMap.haskey(name):
+        result = parts[vertexPropertyMap[name]].parseFloat
+      else:
+        result = default
+
+    # Position (required)
+    let x = getProp("x", 0.0)
+    let y = getProp("y", 0.0)
+    let z = getProp("z", 0.0)
+
+    # Normals (optional) # by default points up
+    let nx = getProp("nx", 0.0)
+    let ny = getProp("ny", 1.0)
+    let nz = getProp("nz", 0.0)
+
+    # UVs (optional)
+    let u = getProp("s", 0.0)
+    let v = getProp("t", 0.0)
+    # Uncomment if textures appear upside down
+    # v = 1.0 - v
+
+    # Colors (optional)
+    let r = getProp("red", 255.0).uint8
+    let g = getProp("green", 255.0).uint8
+    let b = getProp("blue", 255.0).uint8
+    let a = getProp("alpha", 255.0).uint8
+    let color = packColor(r, g, b, a)
+
+    out_vertices[i - bodyStartIndex] = Vertex(
+      x: x.float32, y: y.float32, z: z.float32,
+      xN: nx.float32, yN: ny.float32, zN: nz.float32,
+      color: color,
+      u: u.float32, v: v.float32
+    )
+
+  # --- 3. Body Parsing (Faces) ---
+  let faceLinesEnd = vertexLinesEnd + faceCount
+  for i in vertexLinesEnd ..< faceLinesEnd:
+    let parts = fileLines[i].split()
+    let numVertsInFace = parts[0].parseInt
+
+    case numVertsInFace
+    of 3: # Triangle
+      let i0 = parts[1].parseInt.uint16
+      let i1 = parts[1].parseInt.uint16
+      let i2 = parts[1].parseInt.uint16
+      out_indices.add([i0, i1, i2])
+    of 4: # Quad - triangulate it
+      let i0 = parts[1].parseInt.uint16
+      let i1 = parts[2].parseInt.uint16
+      let i2 = parts[3].parseInt.uint16
+      let i3 = parts[4].parseInt.uint16
+      # First triangle (0, 1, 2)
+      out_indices.add([i0, i1, i2])
+      # Second triangle (0, 2, 3) - common for convex quads
+      out_indices.add([i0, i2, i3])
+    else:
+      echo "loadPly, Unsupported face with $1 vertices. Only triangles (3) and quads (4) are supported." % $numVertsInFace
+
+  # --- 4. Create Sokol Buffers and Final Mesh ---
+  if out_vertices.len == 0 or out_indices.len == 0:
+    echo "loadPly, No vertices or indices were loaded from the PLY file"
+    return
+
+  echo "loadPly, Loaded PLY: $1 vertices, $2 indices" % [$out_vertices.len, $out_indices.len]
+
+  let vbuf = sg.makeBuffer(BufferDesc(
+    usage: BufferUsage(vertexBuffer: true),
+    data: sg.Range(addr: out_vertices[0].addr, size: out_vertices.len * sizeof(Vertex))
+  ))
+  let ibuf = sg.makeBuffer(BufferDesc(
+    usage: BufferUsage(indexBuffer: true),
+    data: sg.Range(addr: out_indices[0].addr, size: out_indices.len * sizeof(uint16))
+  ))
+  result.indexCount = out_indices.len.int32
+  result.bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
+
 type State = object
   pip: Pipeline
   passAction: sg.PassAction
@@ -347,10 +517,11 @@ proc init() {.cdecl.} =
   #state.mesh = mesh
 
   let assetDir = getAppDir() & DirSep
-  let modelPath = assetDir & "bs_rest.obj"
+  #let modelPath = assetDir & "bs_rest.obj"
   #let modelPath = assetDir & "teapot.obj"
+  let modelPath = assetDir & "bs_rest.ply"
 
-  mesh = loadObj(modelPath)
+  mesh = loadPly(modelPath)
   #mesh.bindings.images[shd.imgUTexture] = texcubeImg
   mesh.bindings.images[shd.imgUTexture] = qoiTexture
   mesh.bindings.samplers[shd.smpUSampler] = texcubeSmp
