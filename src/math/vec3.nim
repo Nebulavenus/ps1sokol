@@ -44,6 +44,9 @@ proc dot*(v0: Vec3, v1: Vec3): float32 =
 proc len*(v: Vec3): float32 =
   result = math.sqrt(dot(v, v))
 
+proc lenSqr*(v: Vec3): float32 =
+  return dot(v, v)
+
 proc norm*(v: Vec3): Vec3 =
   let l = len(v);
   if l != 0f:

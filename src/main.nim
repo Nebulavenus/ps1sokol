@@ -11,13 +11,15 @@ import math
 import strutils
 import tables
 import os
+import streams
+import std/random
 
 type Vertex = object
   x, y, z: float32
   xN, yN, zN: float32
   color: uint32
-  #u, v: uint16
   u, v: float32
+  ao: float32 # Raw baked AO value [0.0, 1.0]
 
 type Mesh = object
   bindings: Bindings
@@ -56,7 +58,7 @@ proc vec2ToUshort2n(v: Vec2): (uint16, uint16) =
 
   return (uvX, uvY)
 
-proc loadObj(path: string): Mesh =
+proc loadObj(path: string): (seq[Vertex], seq[uint16]) =
   var
     temp_positions: seq[Vec3]
     temp_normals: seq[Vec3]
@@ -144,16 +146,7 @@ proc loadObj(path: string): Mesh =
           out_indices.add(vertex_cache[key])
 
   echo "Loaded OBJ $1: $2 vertices, $3 indices" % [$path, $out_vertices.len, $out_indices.len]
-  let vbuf = sg.makeBuffer(BufferDesc(
-    usage: BufferUsage(vertexBuffer: true),
-    data: sg.Range(addr: out_vertices[0].addr, size: out_vertices.len * sizeof(Vertex))
-  ))
-  let ibuf = sg.makeBuffer(BufferDesc(
-    usage: BufferUsage(indexBuffer: true),
-    data: sg.Range(addr: out_indices[0].addr, size: out_indices.len * sizeof(uint16))
-  ))
-  result.indexCount = out_indices.len.int32
-  result.bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
+  return (out_vertices, out_indices)
 
 proc packColor(r, g, b, a: uint8): uint32 {.inline.} =
   ## Packs four 8-bit color channels into a single 32-bit integer.
@@ -161,7 +154,139 @@ proc packColor(r, g, b, a: uint8): uint32 {.inline.} =
   ## to correctly map to an RGBA vec4 in the shader.
   result = (uint32(a) shl 24) or (uint32(b) shl 16) or (uint32(g) shl 8) or uint32(r)
 
-proc loadPly(path: string): Mesh =
+# Add these new helper procedures
+proc unpackColor(c: uint32): (uint8, uint8, uint8, uint8) {.inline.} =
+  ## Unpacks a 32-bit AABBGGRR color into four 8-bit channels
+  # We extract specific bits with mask `and` and then shift it
+  # to their correct position of a simple byte u8
+  let r = (c and 0x000000FF'u32).uint8
+  let g = ((c and 0x0000FF00'u32) shr 8).uint8
+  let b = ((c and 0x00FF0000'u32) shr 16).uint8
+  let a = ((c and 0xFF000000'u32) shr 24).uint8
+  return (r, g, b, a)
+
+# Standard method to generate a random point within a unit sphere.
+proc randomHemisphereDirection(normal: Vec3): Vec3 =
+  ## Generates a random direction within a hemisphere oriented by the normal
+  var dir = vec3(rand(-1.0..1.0), rand(-1.0..1.0), rand(-1.0..1.0))
+  while lenSqr(dir) > 1.0 or lenSqr(dir) == 1.0:
+    # Keep generating until we get a point inside the unit sphere (to enusre uniform distribution)
+    dir = vec3(rand(-1.0..1.0), rand(-1.0..1.0), rand(-1.0..1.0))
+
+  dir = norm(dir)
+  # If the random direction is pointing "into" the surface, flip it
+  if dot(dir, normal) < 0.0:
+    dir = Vec3(x: -dir.x, y: -dir.y, z: -dir.z)
+  return dir
+
+# Slower
+proc randomHemisphereDirectionMarsaglia(normal: Vec3): Vec3 =
+  var a = rand(0.0..1.0)
+  var b = rand(0.0..1.0)
+  var theta = arccos(2 * a - 1)
+  var phi = 2 * math.PI * b
+  var x = sin(theta) * cos(phi)
+  var y = sin(theta) * sin(phi)
+  var z = cos(theta)
+
+  var dir = vec3(x, y, z)
+  # If the random direction is pointing "into" the surface, flip it
+  if dot(dir, normal) < 0.0:
+    dir = Vec3(x: -dir.x, y: -dir.y, z: -dir.z)
+  return dir
+
+proc rayTriangleIntersect(rayOrigin, rayDir: Vec3, v0, v1, v2: Vec3, maxDist: float): bool =
+  ## Check if a ray intersects a triangle using the Möller-Trumbore algorithm.
+  ## Returns true on intersection within maxDist, false otherwise
+  const EPSILON = 0.000001
+  let edge1 = v1 - v0
+  let edge2 = v2 - v0
+  let h = cross(rayDir, edge2)
+  let a = dot(edge1, h)
+
+  if a > -EPSILON and a < EPSILON:
+    return false # Ray is parallel to the triangle
+
+  let f = 1.0 / a
+  let s = rayOrigin - v0
+  let u = f * dot(s, h)
+
+  if u < 0.0 or u > 1.0:
+    return false
+
+  let q = cross(s, edge1)
+  let v = f * dot(rayDir, q)
+
+  if v < 0.0 or u + v > 1.0:
+    return false
+
+  # At this point we have an intersection. Check if it's within the max distance
+  let t = f * dot(edge2, q)
+  if t > EPSILON and t < maxDist:
+    return true # Ray intersection
+  else:
+    return false # Intersection is too far away or behind the ray origin
+
+type AOBakeParams = object
+  # Number of rays to cast per vertex. More is better but slower. (e.g., 64, 128)
+  numRays: int
+  # How far a ray can travel to cause occlusion. Prevents distant geometry from affecting local AO.
+  maxDistance: float
+  # How strong the darkening effect is. (e.g., 1.0)
+  intensity: float
+  # A small offset to push the ray origin away from the vertex to prevent self-intersection. (e.g., 0.001)
+  bias: float
+
+proc bakeAmbientOcclusion(vertices: var seq[Vertex], indices: seq[uint16], params: AOBakeParams) =
+  ## Bakes ambient occlusion into vertex colors by raycasting.
+  ## This is a slow, one-time operation on the CPU
+  echo "Starting Ambient Occlusion bake for ", vertices.len, " vertices..."
+  let totalVerts = vertices.len
+  var progressCounter = 0
+
+  for i in 0 ..< vertices.len:
+    let vert = vertices[i]
+    let normal = norm(vec3(vert.xN, vert.yN, vert.zN))
+    let origin = vec3(vert.x, vert.y, vert.z) + normal * params.bias
+    var occludedCount = 0
+
+    for r in 0 ..< params.numRays:
+      let rayDir = randomHemisphereDirection(normal)
+      #let rayDir = randomHemisphereDirectionMarsaglia(normal)
+
+      # Check this ray against all triangles in the mesh
+      for f in 0 ..< (indices.len div 3):
+        let i0 = indices[f * 3]
+        let i1 = indices[f * 3 + 1]
+        let i2 = indices[f * 3 + 2]
+
+        # Don't check for intersection with triangles connected to the current vertex
+        if i0 == i.uint16 or i1 == i.uint16 or i2 == i.uint16:
+          continue
+
+        let v0 = vec3(vertices[i0].x, vertices[i0].y, vertices[i0].z)
+        let v1 = vec3(vertices[i1].x, vertices[i1].y, vertices[i1].z)
+        let v2 = vec3(vertices[i2].x, vertices[i2].y, vertices[i2].z)
+
+        if rayTriangleIntersect(origin, rayDir, v0, v1, v2, params.maxDistance):
+          occludedCount += 1
+          break # This ray is occluded, no need to check other triangles. Move to the next ray
+
+    # Calculate occlusion factor (0.0 = fully lit, 1.0 = fully occluded)
+    let occlusionFactor = float(occludedCount) / float(params.numRays)
+
+    # Save it into vertices
+    vertices[i].ao = occlusionFactor
+
+    # Progress report
+    progressCounter += 1
+    if progressCounter mod (totalVerts div 10) == 0:
+      echo "  AO Bake progress: ", round(float(progressCounter) / float(totalVerts) * 100, 2), "%"
+
+  echo "Ambient Occlusion bake complete."
+
+
+proc loadPly(path: string): (seq[Vertex], seq[uint16]) =
   ## Loads a 3D model from an ASCII PLY file.
   ##
   ## Features:
@@ -316,17 +441,100 @@ proc loadPly(path: string): Mesh =
     return
 
   echo "loadPly, Loaded PLY: $1 vertices, $2 indices" % [$out_vertices.len, $out_indices.len]
+  return (out_vertices, out_indices)
 
-  let vbuf = sg.makeBuffer(BufferDesc(
-    usage: BufferUsage(vertexBuffer: true),
-    data: sg.Range(addr: out_vertices[0].addr, size: out_vertices.len * sizeof(Vertex))
-  ))
-  let ibuf = sg.makeBuffer(BufferDesc(
-    usage: BufferUsage(indexBuffer: true),
-    data: sg.Range(addr: out_indices[0].addr, size: out_indices.len * sizeof(uint16))
-  ))
-  result.indexCount = out_indices.len.int32
-  result.bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
+# --- Caching and mesh processing procedures ---
+proc saveMeshToCache(path: string, vertices: seq[Vertex], indices: seq[uint16]) =
+  ## Saves the processed vertex and index data to a fast binary cache file
+  echo "Saving baked mesh to cache: ", path
+  var stream = newFileStream(path, fmWrite)
+  if stream == nil:
+    echo "Error: Could not open cache file for writing: ", path
+    return
+
+  try:
+    # Write a simple header: vertex count and index count
+    stream.write(vertices.len)
+    stream.write(indices.len)
+    # Write the raw data blobs
+    stream.writeData(vertices[0].addr, vertices.len * sizeof(Vertex))
+    stream.writeData(indices[0].addr, indices.len * sizeof(uint16))
+  finally:
+    stream.close()
+
+proc loadMeshFromCache(path: string): (seq[Vertex], seq[uint16]) =
+  ## Loads vertex and index data from a binary cache file.
+  echo "Loading baked mesh from cache: ", path
+  var stream = newFileStream(path, fmRead)
+  if stream == nil:
+    echo "Error: Could not open cache file for reading: ", path
+    return
+
+  var vertices: seq[Vertex]
+  var indices: seq[uint16]
+
+  try:
+    var vertCount, idxCount: int
+    stream.read(vertCount)
+    stream.read(idxCount)
+
+    vertices.setLen(vertCount)
+    indices.setLen(idxCount)
+
+    discard stream.readData(vertices[0].addr, vertCount * sizeof(Vertex))
+    discard stream.readData(indices[0].addr, idxCount * sizeof(uint16))
+  finally:
+    stream.close()
+
+  return (vertices, indices)
+
+proc loadAndProcessMesh(modelPath: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): Mesh =
+  ## High-level procedure to load a mesh.
+  ## It will use a cached version if available, otherwise it will load,
+  ## bake AO, and save a new version to the cache.
+  var
+    cpuVertices: seq[Vertex]
+    cpuIndices: seq[uint16]
+
+  let cachePath = modelPath & ".baked_ao.bin"
+
+  if os.fileExists(cachePath):
+    # Load directly from the fast binary cache
+    (cpuVertices, cpuIndices) = loadMeshFromCache(cachePath)
+  else:
+    # Cache not found, do the full loading and baking process
+    let fileExt = modelPath.splitFile.ext
+    case fileExt.toLower()
+    of ".ply":
+      (cpuVertices, cpuIndices) = loadPly(modelPath)
+    of ".obj":
+      (cpuVertices, cpuIndices) = loadObj(modelPath)
+    else:
+      echo "Unsupported model format: ", fileExt
+      return
+
+    if cpuVertices.len > 0:
+      # Bake Ambient Occlusion
+      bakeAmbientOcclusion(cpuVertices, cpuIndices, aoParams)
+      # Save the result to cache for the next run
+      saveMeshToCache(cachePath, cpuVertices, cpuIndices)
+
+  # --- GPU Upload ---
+  if cpuVertices.len > 0 and cpuIndices.len > 0:
+    let vbuf = sg.makeBuffer(BufferDesc(
+      usage: BufferUsage(vertexBuffer: true),
+      data: sg.Range(addr: cpuVertices[0].addr, size: cpuVertices.len * sizeof(Vertex))
+    ))
+    let ibuf = sg.makeBuffer(BufferDesc(
+      usage: BufferUsage(indexBuffer: true),
+      data: sg.Range(addr: cpuIndices[0].addr, size: cpuIndices.len * sizeof(uint16))
+    ))
+    result.indexCount = cpuIndices.len.int32
+    result.bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
+    result.bindings.images[shd.imgUTexture] = texture
+    result.bindings.samplers[shd.smpUSampler] = sampler
+  else:
+    echo "Error: No vertex data to upload to GPU."
 
 type State = object
   pip: Pipeline
@@ -336,9 +544,14 @@ type State = object
   camPos: Vec3
   camYaw: float32
   camPitch: float32
-  vsParams: VSParams
-  fsParams: FSParams
+  vsParams: VsParams
+  fsParams: FsParams
   rx, ry: float32
+  # -- Controlling AO --
+  aoMode: int
+  aoIntensity: float32
+  aoDetailColor: Vec3
+  aoBaseColor: Vec3
 
 var state: State
 
@@ -362,61 +575,6 @@ proc init() {.cdecl.} =
     of backendD3d11: echo "using D3D11 backend"
     of backendMetalMacos: echo "using Metal backend"
     else: echo "using untested backend"
-
-  #sapp.lockMouse(true)
-  #[
-    Cube vertex buffer with packed vertex formats for color and texture coords.
-    Note that a vertex format which must be portable across all
-    backends must only use the normalized integer formats
-    (BYTE4N, UBYTE4N, SHORT2N, SHORT4N), which can be converted
-    to floating point formats in the vertex shader inputs.
-  ]#
-  #[
-  const vertices = [
-    Vertex( x: -1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u:     0, v:     0 ),
-    Vertex( x:  1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u: 32767, v: 32767 ),
-    Vertex( x: -1.0, y:  1.0, z: -1.0,  xN: 0.0, yN: 0.0, zN: -1.0,  color: 0xFF0000FF'u32, u:     0, v: 32767 ),
-    Vertex( x: -1.0, y: -1.0, z:  1.0,  xN: 0.0, yN: 0.0, zN: 1.0,  color: 0xFF00FF00'u32, u:     0, v:     0 ),
-    Vertex( x:  1.0, y: -1.0, z:  1.0,  xN: 0.0, yN: 0.0, zN: 1.0,  color: 0xFF00FF00'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z:  1.0,  xN: 0.0, yN: 0.0, zN: 1.0,  color: 0xFF00FF00'u32, u: 32767, v: 32767 ),
-    Vertex( x: -1.0, y:  1.0, z:  1.0,  xN: 0.0, yN: 0.0, zN: 1.0,  color: 0xFF00FF00'u32, u:     0, v: 32767 ),
-    Vertex( x: -1.0, y: -1.0, z: -1.0,  xN: -1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF0000'u32, u:     0, v:     0 ),
-    Vertex( x: -1.0, y:  1.0, z: -1.0,  xN: -1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF0000'u32, u: 32767, v:     0 ),
-    Vertex( x: -1.0, y:  1.0, z:  1.0,  xN: -1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF0000'u32, u: 32767, v: 32767 ),
-    Vertex( x: -1.0, y: -1.0, z:  1.0,  xN: -1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF0000'u32, u:     0, v: 32767 ),
-    Vertex( x:  1.0, y: -1.0, z: -1.0,  xN: 1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF007F'u32, u:     0, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z: -1.0,  xN: 1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF007F'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z:  1.0,  xN: 1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF007F'u32, u: 32767, v: 32767 ),
-    Vertex( x:  1.0, y: -1.0, z:  1.0,  xN: 1.0, yN: 0.0, zN: 0.0,  color: 0xFFFF007F'u32, u:     0, v: 32767 ),
-    Vertex( x: -1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: -1.0, zN: 0.0,  color: 0xFFFF7F00'u32, u:     0, v:     0 ),
-    Vertex( x: -1.0, y: -1.0, z:  1.0,  xN: 0.0, yN: -1.0, zN: 0.0,  color: 0xFFFF7F00'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y: -1.0, z:  1.0,  xN: 0.0, yN: -1.0, zN: 0.0,  color: 0xFFFF7F00'u32, u: 32767, v: 32767 ),
-    Vertex( x:  1.0, y: -1.0, z: -1.0,  xN: 0.0, yN: -1.0, zN: 0.0,  color: 0xFFFF7F00'u32, u:     0, v: 32767 ),
-    Vertex( x: -1.0, y:  1.0, z: -1.0,  xN: 0.0, yN: 1.0, zN: 0.0,  color: 0xFF007FFF'u32, u:     0, v:     0 ),
-    Vertex( x: -1.0, y:  1.0, z:  1.0,  xN: 0.0, yN: 1.0, zN: 0.0,  color: 0xFF007FFF'u32, u: 32767, v:     0 ),
-    Vertex( x:  1.0, y:  1.0, z:  1.0,  xN: 0.0, yN: 1.0, zN: 0.0,  color: 0xFF007FFF'u32, u: 32767, v: 32767 ),
-    Vertex( x:  1.0, y:  1.0, z: -1.0,  xN: 0.0, yN: 1.0, zN: 0.0,  color: 0xFF007FFF'u32, u:     0, v: 32767 ),
-  ]
-  let vbuf = sg.makeBuffer(BufferDesc(
-    usage: BufferUsage(vertexBuffer: true),
-    data: sg.Range(addr: vertices.addr, size: vertices.sizeof)
-  ))
-
-  # an index buffer
-  const indices = [
-    0'u16, 1, 2,  0, 2, 3,
-    6, 5, 4,      7, 6, 4,
-    8, 9, 10,     8, 10, 11,
-    14, 13, 12,   15, 14, 12,
-    16, 17, 18,   16, 18, 19,
-    22, 21, 20,   23, 22, 20,
-  ]
-  let ibuf = sg.makeBuffer(BufferDesc(
-    usage: BufferUsage(indexBuffer: true),
-    data: sg.Range(addr: indices.addr, size: indices.sizeof)
-  ))
-  ]#
 
   # create a checker board texture
   let pixels = [
@@ -444,8 +602,10 @@ proc init() {.cdecl.} =
   # load qoi texture
   var qoiImage: QOIF
   try:
-    qoiImage = readQOI("assets/diffuse.qoi")
+    #qoiImage = readQOI("assets/diffuse.qoi")
     #qoiImage = readQOI("diffuse.qoi")
+    qoiImage = readQOI("assets/malenia.qoi")
+    #qoiImage = readQOI("malenia.qoi")
     echo "Success loaded qoi: diffuse.qoi ", qoiImage.header.width, "-", qoiImage.header.height
     echo "First byte is not null! ", qoiImage.data[160]
     echo "Data is not null! ", qoiImage.data.len
@@ -500,37 +660,45 @@ proc init() {.cdecl.} =
         VertexAttrState(format: vertexFormatFloat3),  # position
         VertexAttrState(format: vertexFormatFloat3),  # normal
         VertexAttrState(format: vertexFormatUbyte4n), # color0
-        #VertexAttrState(format: vertexFormatShort2n), # texcoord0
-        VertexAttrState(format: vertexFormatFloat2), # texcoord0
+        VertexAttrState(format: vertexFormatFloat2),  # texcoord0
+        VertexAttrState(format: vertexFormatFloat),  # ao
       ],
     ),
     indexType: indexTypeUint16,
     #faceWinding: faceWindingCcw,
-    cullMode: cullModeBack,
+    #cullMode: cullModeBack,
+    cullMode: cullModeNone,
     depth: DepthState(
       compare: compareFuncLessEqual,
       writeEnabled: true,
     )
   ))
-  # save everything in bindings
+  # save everything in mesh after processing it
   var mesh: Mesh
-  #mesh.bindings = Bindings(vertexBuffers: [vbuf], indexbuffer: ibuf)
-  #mesh.bindings.images[shd.imgUTexture] = texcubeImg
-  #mesh.bindings.samplers[shd.smpUSampler] = texcubeSmp
-  #mesh.indexCount = indices.sizeof
-  #state.mesh = mesh
 
   let assetDir = getAppDir() & DirSep
-  #let modelPath = assetDir & "bs_rest.obj"
+  let modelPath = assetDir & "malenia.ply"
 
-  #let modelPath = assetDir & "teapot.ply"
-  let modelPath = assetDir & "bs_rest.ply"
-  mesh = loadPly(modelPath)
-  #let modelPath = assetDir & "bs_rest.obj"
-  #mesh = loadObj(modelPath)
+  # Define AO parameters
+  let aoParams = AOBakeParams(
+    numRays: 64,
+    maxDistance: 1.0,
+    intensity: 1.0,
+    bias: 0.001,
+  )
+  # Also store real-time AO variables
+  #state.aoMode = AOBakeMode.Multiply
+  state.aoMode = 0
+  state.aoIntensity = 1.5
+  state.aoDetailColor = vec3(0.2, 0.1, 0.05) # "dirt"
+  state.aoBaseColor = vec3(0.1, 0.1, 0.2) # Cool ambient
+
+  # Load the mesh. One function handles everything
+  mesh = loadAndProcessMesh(modelPath, aoParams, qoiTexture, texcubeSmp)
+
   #mesh.bindings.images[shd.imgUTexture] = texcubeImg
-  mesh.bindings.images[shd.imgUTexture] = qoiTexture
-  mesh.bindings.samplers[shd.smpUSampler] = texcubeSmp
+  #mesh.bindings.images[shd.imgUTexture] = qoiTexture
+  #mesh.bindings.samplers[shd.smpUSampler] = texcubeSmp
   state.mesh = mesh
 
 proc computeVsParams(): shd.VsParams =
@@ -561,19 +729,21 @@ proc computeVsParams(): shd.VsParams =
     u_mvp: proj * view * model,
     u_model: model,
     u_camPos: camPos,
-    #u_jitterAmount: 240.0, # Simulate a 240p vertical resolution
-    u_jitterAmount: 480.0, # Simulate a 240p vertical resolution
+    u_jitterAmount: 240.0, # Simulate a 240p vertical resolution
+    #u_jitterAmount: 480.0, # Simulate a 240p vertical resolution
   )
 
 proc computeFsParams(): shd.FsParams =
   result = shd.FsParams(
     u_fogColor: vec3(0.25f, 0.5f, 0.75f),
     u_fogNear: 4.0f,
-    u_fogFar: 12.0f,
-    #u_ditherSize: vec2(800.0, 600.0)
-    #u_ditherSize: vec2(sapp.widthf(), sapp.heightf()),
-    u_ditherSize: vec2(320.0, 240.0),
-    #u_ditherSize: vec2(50, 50),
+    u_fogFar: 20.0f,
+    u_ditherSize: vec2(320.0, 240.0), # Should be equal to window size
+    # -- AO uniforms --
+    u_aoMode: state.aoMode.int32,
+    u_aoIntensity: state.aoIntensity,
+    u_aoDetailColor: state.aoDetailColor,
+    u_aoBaseColor: state.aoBaseColor
   )
 
 proc frame() {.cdecl.} =
@@ -630,6 +800,18 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
       state.camPos.y += moveSpeed
     of keyCodeE:
       state.camPos.y -= moveSpeed
+    # -- AO realtime controlling --
+    of keyCodeM:
+      # Cycle through AO modes
+      let nextMode = (state.aoMode.int + 1) mod 3
+      state.aoMode = nextMode
+      echo "Set AO Mode to: ", state.aoMode
+    of keyCodeUp:
+      state.aoIntensity += 0.1
+      echo "AO Intensity: ", state.aoIntensity
+    of keyCodeDown:
+      state.aoIntensity = max(0.0, state.aoIntensity - 0.1)
+      echo "AO Intensity: ", state.aoIntensity
     else: discard
 
 # main
@@ -642,7 +824,7 @@ sapp.run(sapp.Desc(
   windowTitle: "Game",
   width: 640,
   height: 480,
-  sampleCount: 0,
+  sampleCount: 4,
   icon: IconDesc(sokol_default: true),
   logger: sapp.Logger(fn: slog.fn)
 ))

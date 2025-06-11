@@ -17,6 +17,7 @@ in vec3 a_position;
 in vec3 a_normal;
 in vec4 a_color0;
 in vec2 a_texcoord0;
+in float a_ao;
 
 // Sent to the fragment
 out vec4 v_color;
@@ -25,6 +26,7 @@ out vec4 v_color;
 out vec3 v_affine_uv;
 // Distance from vertex to camera for fog
 out float v_dist;
+out float v_ao;
 
 // Simple directional light
 const vec3 lightDir = vec3(0.0, 0.0, -2.0);
@@ -46,6 +48,8 @@ void main() {
     vec3 world_normal = normalize(mat3(u_model) * a_normal);
     float light = 0.3 + max(0.0, dot(world_normal, normalize(lightDir))) * 0.7;
     v_color = vec4(vec3(light), 1.0) * a_color0; // Premultiply it with color from vertex
+    // Also pass Ambient Occlusion to fragment
+    v_ao = a_ao;
 
     // --- 3. Fog Calculation ---
     vec3 world_pos = (u_model * vec4(a_position.xyz, 1.0)).xyz;
@@ -70,11 +74,17 @@ layout(binding = 1) uniform fs_params {
     float u_fogNear;
     float u_fogFar;
     vec2 u_ditherSize;
+    // --- AO Uniforms ---
+    int u_aoMode; // 0=Multiply, 1=Detail, 2=Blend
+    float u_aoIntensity;
+    vec3 u_aoDetailColor;
+    vec3 u_aoBaseColor;
 };
 
 in vec4 v_color;
 in vec3 v_affine_uv;
 in float v_dist;
+in float v_ao;
 
 out vec4 frag_color;
 
@@ -119,9 +129,23 @@ void main() {
     // The NEAREST filter on the sampler provides the sharp, pixelated look.
     vec4 tex_color = texture(sampler2D(u_texture, u_sampler), final_uv);
 
-    // --- 2. Color Quantization and Dithering ---
+    // --- 2. Color Quantization and Dithering + Ambient Occlusion ---
     // Combine texture and vertex lighting color
     vec3 final_color = tex_color.rgb * v_color.rgb;
+
+    // Ambient Occlusion
+    float scaled_ao = clamp(v_ao * u_aoIntensity, 0.0, 1.0);
+    if (u_aoMode == 0) { // Multiply Mode
+        final_color *= (1.0 - scaled_ao);
+    }
+    else if (u_aoMode == 1) { // Detail Mode
+        final_color += scaled_ao * u_aoDetailColor;
+    }
+    else if (u_aoMode == 2) { // Blend Mode
+        // lerp(base, vertex, ao)
+        final_color = mix(u_aoBaseColor, final_color, scaled_ao);
+    }
+
     // Apply the effect
     final_color = quantize_and_dither(final_color, gl_FragCoord.xy, u_ditherSize.xy);
 
