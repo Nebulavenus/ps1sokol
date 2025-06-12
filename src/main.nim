@@ -865,9 +865,12 @@ type State = object
   pip: Pipeline
   passAction: sg.PassAction
   mesh: Mesh # Track mesh
+  ocean: Mesh # Ocean mesh
+  oceanFrame: float
   carMesh: Mesh # Player's car mesh
   input: InputState
   player: PlayerVehicle
+  cameraOffsetY: float
   cameraPos: Vec3 # Camera's actual world position
   cameraTarget: Vec3 # Point the camera is looking at
   vsParams: VsParams
@@ -944,6 +947,7 @@ proc init() {.cdecl.} =
   let assetDir = getAppDir() & DirSep
   let trackPath = assetDir & "track.ply"
   let carPath = assetDir & "car.ply"
+  let oceanPath = assetDir & "ocean.ply"
 
   # Define AO parameters
   let aoParams = AOBakeParams(
@@ -955,7 +959,7 @@ proc init() {.cdecl.} =
   # Also store real-time AO variables
   state.aoShadowStrength = 1.0
   state.skyLightColor = vec3(0.4, 0.5, 0.8) # Nice light blue sky
-  state.skyLightIntensity = 1.0
+  state.skyLightIntensity = 0.0
   state.groundLightColor = vec3(0.6, 0.4, 0.3) # Warm earthy ground bounce
   state.groundLightIntensity = 0.0
 
@@ -967,8 +971,10 @@ proc init() {.cdecl.} =
 
   # Load the mesh. One function handles everything
   #let trackTexture = loadTexture("assets/diffuse.qoi")
-  #let trackTexture = checkboardImg
-  let trackTexture = loadTexture("assets/track.qoi")
+  let oceanTexture = loadTexture("assets/ocean.qoi")
+  var ocean = loadAndProcessMesh(oceanPath, aoParams, oceanTexture, pointSmp)
+
+  let trackTexture = loadTexture("assets/track1.qoi")
   var mesh = loadAndProcessMesh(trackPath, aoParams, trackTexture, pointSmp)
 
   let carTexture = loadTexture("assets/car2.qoi")
@@ -976,10 +982,11 @@ proc init() {.cdecl.} =
 
   # Don't forget to save it in state
   state.mesh = mesh
+  state.ocean = ocean
   state.carMesh = carMesh
 
   # --- Setup camera & player ---
-  state.player.position = vec3(0.0, 0.0, 0.0)
+  state.player.position = vec3(0.0, 0.2, 0.0)
   state.player.velocity = vec3(0, 0, 0)
   state.player.yaw = 0.0
   state.player.angularVelocity = 0.0
@@ -987,6 +994,7 @@ proc init() {.cdecl.} =
 
   # Camera a bit behind the player
   state.cameraPos = vec3(0.0, 10.0, 2.0)
+  state.cameraOffsetY = 5.0
   state.cameraTarget = state.player.position
 
 proc computeVsParams(): shd.VsParams =
@@ -1020,7 +1028,8 @@ proc computeFsParams(): shd.FsParams =
 
 proc updateCamera(dt: float32) =
   # -- Constants to tweak the camera feel --
-  const camOffset = vec3(0.0, 5.0, 8.0) # How far behind and above the car
+  #const camOffset = vec3(0.0, 5.0, 8.0) # How far behind and above the car
+  let camOffset = vec3(0.0, state.cameraOffsetY, 8.0) # How far behind and above the car
   const targetOffset = vec3(0.0, 1.0, 0.0)  # Look slightly above the car's pivot
   const followSpeed = 5.0 # How quickly the camera catches up (higher is tighter)
 
@@ -1124,6 +1133,22 @@ proc frame() {.cdecl.} =
   sg.applyPipeline(state.pip)
   sg.applyUniforms(shd.ubFsParams, sg.Range(addr: fsParams.addr, size: fsParams.sizeof))
 
+  # --- Draw ocean ---
+  var oceanModel = identity()
+  state.oceanFrame += dt / 1.5
+  let offset = (sin(state.oceanFrame) * 0.4) # adjust the frequency and amplitude as needed
+  let translationMatrix = translate(vec3(0, offset, 0))
+  oceanModel = oceanModel * translationMatrix
+  var oceanVsParams = shd.VsParams(
+    u_mvp: proj * view * oceanModel,
+    u_model: oceanModel,
+    u_camPos: state.cameraPos,
+    u_jitterAmount: 240.0,
+  )
+  sg.applyBindings(state.ocean.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: oceanVsParams.addr, size: oceanVsParams.sizeof))
+  sg.draw(0, state.ocean.indexCount, 1)
+
   # --- Draw track ---
   let trackModel = identity()
   var trackVsParams = shd.VsParams(
@@ -1167,6 +1192,9 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
     if state.camPitch > pitchLimit: state.camPitch = pitchLimit
     if state.camPitch < -pitchLimit: state.camPitch = -pitchLimit
   ]#
+  if e.`type` == EventType.eventTypeMouseScroll:
+    state.cameraOffsetY += e.scrollY
+    state.cameraOffsetY = max(state.cameraOffsetY, 0.0)
 
   # Keyboard
   if e.`type` == EventType.eventTypeKeyDown or e.`type` == EventType.eventTypeKeyUp:
