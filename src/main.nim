@@ -19,7 +19,7 @@ type Vertex = object
   xN, yN, zN: float32
   color: uint32
   u, v: float32
-  ao: float32 # Raw baked AO value [0.0, 1.0]
+  bxN, byN, bzN: float32 # Bent Normal vector
 
 type Mesh = object
   bindings: Bindings
@@ -316,6 +316,102 @@ type AOBakeParams = object
   # A small offset to push the ray origin away from the vertex to prevent self-intersection. (e.g., 0.001)
   bias: float
 
+# This function calculates bent normals instead of a simple AO float.
+proc bakeBentNormalWithGrid(vertices: var seq[Vertex], indices: seq[uint16], params: AOBakeParams, gridResolution: int) =
+  ## Bakes a bent normal vector into each vertex using a Uniform Grid for acceleration.
+  var grid = initUniformGrid(vertices, gridResolution)
+  populateGrid(grid, vertices, indices)
+
+  echo "Starting Bent Normal AO bake for ", vertices.len, " vertices..."
+  let totalVerts = vertices.len
+  var progressCounter = 0
+
+  for i in 0 ..< vertices.len:
+    let vert = vertices[i]
+    let geoNormal = norm(vec3(vert.xN, vert.yN, vert.zN))
+    let origin = vec3(vert.x, vert.y, vert.z) + geoNormal * params.bias
+
+    var sumOfUnoccludedDirections = vec3(0, 0, 0)
+
+    for r in 0 ..< params.numRays:
+      let rayDir = randomHemisphereDirection(geoNormal)
+
+      # Grid traversal setup (DDA-like algorithm)
+      var (ix, iy, iz) = worldToCell(grid, origin)
+      let stepX = if rayDir.x > 0: 1 else: -1
+      let stepY = if rayDir.y > 0: 1 else: -1
+      let stepZ = if rayDir.z > 0: 1 else: -1
+
+      # Handle division by zero for axis-aligned rays
+      let tiny = 1.0e-6
+      let tDeltaX = if abs(rayDir.x) < tiny: 1.0e38 else: abs(grid.cellSize.x / rayDir.x)
+      let tDeltaY = if abs(rayDir.y) < tiny: 1.0e38 else: abs(grid.cellSize.y / rayDir.y)
+      let tDeltaZ = if abs(rayDir.z) < tiny: 1.0e38 else: abs(grid.cellSize.z / rayDir.z)
+
+      let nextBx = grid.bounds.min.x + (ix.float + (if stepX > 0: 1 else: 0)) * grid.cellSize.x
+      let nextBy = grid.bounds.min.y + (ix.float + (if stepY > 0: 1 else: 0)) * grid.cellSize.y
+      let nextBz = grid.bounds.min.z + (ix.float + (if stepZ > 0: 1 else: 0)) * grid.cellSize.z
+
+      var tMaxX = if abs(rayDir.x) < tiny: 1.0e38 else: (nextBx - origin.x) / rayDir.x
+      var tMaxY = if abs(rayDir.y) < tiny: 1.0e38 else: (nextBy - origin.y) / rayDir.y
+      var tMaxZ = if abs(rayDir.z) < tiny: 1.0e38 else: (nextBz - origin.z) / rayDir.z
+
+      var rayIsOccluded = false
+      while not rayIsOccluded:
+        # Check for intersection with triangles in the current cell
+        let cellIndex = iz * grid.dims[0] * grid.dims[1] + iy * grid.dims[0] + ix
+
+        for triIndex in grid.cells[cellIndex]:
+          let i0 = indices[triIndex * 3 + 0]
+          let i1 = indices[triIndex * 3 + 1]
+          let i2 = indices[triIndex * 3 + 2]
+          if i0 == i.uint16 or i1 == i.uint16 or i2 == i.uint16: continue
+
+          let v0 = vec3(vertices[i0].x, vertices[i0].y, vertices[i0].z)
+          let v1 = vec3(vertices[i1].x, vertices[i1].y, vertices[i1].z)
+          let v2 = vec3(vertices[i2].x, vertices[i2].y, vertices[i2].z)
+
+          if rayTriangleIntersect(origin, rayDir, v0, v1, v2, params.maxDistance):
+            rayIsOccluded = true
+            break # Found hit, stop checking triangles in this cell
+
+          if rayIsOccluded: break
+
+        # Step to the next cell
+        if tMaxX < tMaxY:
+          if tMaxX < tMaxZ:
+            ix += stepX; tMaxX += tDeltaX
+          else:
+            iz += stepZ; tMaxZ += tDeltaZ
+        else:
+          if tMaxY < tMaxZ:
+            iy += stepY; tMaxY += tDeltaY
+          else:
+            iz += stepZ; tMaxZ += tDeltaZ
+
+        # Exit if ray leaves the grid
+        if ix < 0 or ix >= grid.dims[0] or
+            iy < 0 or iy >= grid.dims[1] or
+            iz < 0 or iz >= grid.dims[2]:
+              break
+
+      if not rayIsOccluded:
+        sumOfUnoccludedDirections += rayDir
+
+    # After all rays are cast, average the sum of directions.
+    # The resulting vector is the Bent Normal. Its length naturally encodes occlusion.
+    let bentNormal = sumOfUnoccludedDirections / params.numRays.float
+    vertices[i].bxN = bentNormal.x
+    vertices[i].byN = bentNormal.y
+    vertices[i].bzN = bentNormal.z
+
+    # Progress report
+    progressCounter += 1
+    if progressCounter mod (totalVerts div 10) == 0:
+      echo "  AO Bake progress: ", round(float(progressCounter) / float(totalVerts) * 100, 2), "%"
+
+  echo "Accelerated Ambient Occlusion bake complete."
+
 proc bakeAmbientOcclusionWithGrid(vertices: var seq[Vertex], indices: seq[uint16], params: AOBakeParams, gridResolution: int) =
   ## Bakes a raw ambient occlusion value using a Unfiform Grid for acceleration
   var grid = initUniformGrid(vertices, gridResolution)
@@ -395,7 +491,8 @@ proc bakeAmbientOcclusionWithGrid(vertices: var seq[Vertex], indices: seq[uint16
               break
 
     # Calculate AO value
-    vertices[i].ao = float(occludedCount) / float(params.numRays)
+    # TODO: disabled, because removed it from Vertex format. ao: float
+    #vertices[i].ao = float(occludedCount) / float(params.numRays)
 
     # Progress report
     progressCounter += 1
@@ -443,7 +540,8 @@ proc bakeAmbientOcclusion(vertices: var seq[Vertex], indices: seq[uint16], param
     let occlusionFactor = float(occludedCount) / float(params.numRays)
 
     # Save it into vertices
-    vertices[i].ao = occlusionFactor
+    # TODO: disabled, because removed it from Vertex format. ao: float
+    #vertices[i].ao = occlusionFactor
 
     # Progress report
     progressCounter += 1
@@ -683,7 +781,8 @@ proc loadAndProcessMesh(modelPath: string, aoParams: AOBakeParams, texture: Imag
     if cpuVertices.len > 0:
       # Bake Ambient Occlusion with GRID
       #bakeAmbientOcclusion(cpuVertices, cpuIndices, aoParams)
-      bakeAmbientOcclusionWithGrid(cpuVertices, cpuIndices, aoParams, gridResolution = 64)
+      #bakeAmbientOcclusionWithGrid(cpuVertices, cpuIndices, aoParams, gridResolution = 64)
+      bakeBentNormalWithGrid(cpuVertices, cpuIndices, aoParams, gridResolution = 64)
       # Save the result to cache for the next run
       saveMeshToCache(cachePath, cpuVertices, cpuIndices)
 
@@ -717,12 +816,10 @@ type State = object
   rx, ry: float32
   # -- Controlling AO Multi-Layered --
   aoShadowStrength: float32
-  aoDirtStrength: float32
-  aoTintStrength: float32
-  aoDetailColor: Vec3
-  aoBaseColor: Vec3
-  aoDirtRange: Vec2
-  aoTintRange: Vec2
+  skyLightColor: Vec3
+  skyLightIntensity: float32
+  groundLightColor: Vec3
+  groundLightIntensity: float32
 
 var state: State
 
@@ -830,7 +927,7 @@ proc init() {.cdecl.} =
         VertexAttrState(format: vertexFormatFloat3),  # normal
         VertexAttrState(format: vertexFormatUbyte4n), # color0
         VertexAttrState(format: vertexFormatFloat2),  # texcoord0
-        VertexAttrState(format: vertexFormatFloat),  # ao
+        VertexAttrState(format: vertexFormatFloat3),  # bentNormal
       ],
     ),
     indexType: indexTypeUint16,
@@ -856,17 +953,11 @@ proc init() {.cdecl.} =
     bias: 0.001,
   )
   # Also store real-time AO variables
-  # Start with shadows enabled and other effects off
   state.aoShadowStrength = 1.0
-  state.aoDirtStrength = 0.0
-  state.aoTintStrength = 0.0
-
-  state.aoDetailColor = vec3(0.2, 0.1, 0.05) # "dirt" color
-  state.aoBaseColor = vec3(0.1, 0.1, 0.2) # Cool ambient tint
-
-  # Set default range to [0, 1], which is linear mapping
-  state.aoDirtRange = vec2(0.0, 1.0)
-  state.aoTintRange = vec2(0.0, 1.0)
+  state.skyLightColor = vec3(0.4, 0.5, 0.8) # Nice light blue sky
+  state.skyLightIntensity = 1.0
+  state.groundLightColor = vec3(0.6, 0.4, 0.3) # Warm earthy ground bounce
+  state.groundLightIntensity = 0.0
 
   # Load the mesh. One function handles everything
   mesh = loadAndProcessMesh(modelPath, aoParams, qoiTexture, texcubeSmp)
@@ -916,12 +1007,10 @@ proc computeFsParams(): shd.FsParams =
     u_ditherSize: vec2(320.0, 240.0), # Should be equal to window size
     # -- AO uniforms --
     u_aoShadowStrength: state.aoShadowStrength,
-    u_aoDirtStrength: state.aoDirtStrength,
-    u_aoTintStrength: state.aoTintStrength,
-    u_aoDetailColor: state.aoDetailColor,
-    u_aoBaseColor: state.aoBaseColor,
-    u_aoDirtRange: state.aoDirtRange,
-    u_aoTintRange: state.aoTintRange,
+    u_skyLightColor: state.skyLightColor,
+    u_skyLightIntensity: state.skyLightIntensity,
+    u_groundLightColor: state.groundLightColor,
+    u_groundLightIntensity: state.groundLightIntensity
   )
 
 proc frame() {.cdecl.} =
@@ -981,20 +1070,12 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
     of keyCodeE:
       state.camPos.y -= moveSpeed
     # -- AO realtime controlling --
-    # --- Shadow Strength Control ---
-    # --- Strength Controls ---
-    of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step*2); echo "Shadow Str: ", state.aoShadowStrength
-    of keyCode2: state.aoShadowStrength += step*2; echo "Shadow Str: ", state.aoShadowStrength
-    of keyCode3: state.aoDirtStrength = max(0.0, state.aoDirtStrength - step*2); echo "Dirt Str: ", state.aoDirtStrength
-    of keyCode4: state.aoDirtStrength += step*2; echo "Dirt Str: ", state.aoDirtStrength
-    of keyCode5: state.aoTintStrength = max(0.0, state.aoTintStrength - step*2); echo "Tint Str: ", state.aoTintStrength
-    of keyCode6: state.aoTintStrength += step*2; echo "Tint Str: ", state.aoTintStrength
-
-    # --- Dirt Gradient Range Controls ---
-    of keyCode7: state.aoDirtRange.x = max(0.0, state.aoDirtRange.x - step); echo "Dirt Range Start: ", state.aoDirtRange.x
-    of keyCode8: state.aoDirtRange.x = min(state.aoDirtRange.y, state.aoDirtRange.x + step); echo "Dirt Range Start: ", state.aoDirtRange.x
-    of keyCode9: state.aoDirtRange.y = max(state.aoDirtRange.x, state.aoDirtRange.y - step); echo "Dirt Range End: ", state.aoDirtRange.y
-    of keyCode0: state.aoDirtRange.y = min(1.0, state.aoDirtRange.y + step); echo "Dirt Range End: ", state.aoDirtRange.y
+    of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step); echo "Shadow Str: ", state.aoShadowStrength
+    of keyCode2: state.aoShadowStrength += step; echo "Shadow Str: ", state.aoShadowStrength
+    of keyCode3: state.skyLightIntensity = max(0.0, state.skyLightIntensity - step); echo "Sky Light Str: ", state.skyLightIntensity
+    of keyCode4: state.skyLightIntensity += step; echo "Sky Light Str: ", state.skyLightIntensity
+    of keyCode5: state.groundLightIntensity = max(0.0, state.groundLightIntensity - step); echo "Ground Light Str: ", state.groundLightIntensity
+    of keyCode6: state.groundLightIntensity += step; echo "Ground Light Str: ", state.groundLightIntensity
     else: discard
 
 # main

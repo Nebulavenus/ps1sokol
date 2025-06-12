@@ -38,6 +38,10 @@ proc `-=`*(v0: var Vec3, v1: Vec3) =
 proc `*`*(v0: Vec3, s: float32): Vec3 =
   result = Vec3(x: v0.x * s, y: v0.y * s, z: v0.z * s)
 
+proc `/`*(v0: Vec3, s: float32): Vec3 =
+  # TODO: handle division by zero
+  result = Vec3(x: v0.x / s, y: v0.y / s, z: v0.z / s)
+
 proc dot*(v0: Vec3, v1: Vec3): float32 =
   result = v0.x * v1.x + v0.y * v1.y + v0.z * v1.z
 

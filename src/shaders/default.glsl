@@ -17,7 +17,7 @@ in vec3 a_position;
 in vec3 a_normal;
 in vec4 a_color0;
 in vec2 a_texcoord0;
-in float a_ao;
+in vec3 a_bentNormal;
 
 // Sent to the fragment
 out vec4 v_color;
@@ -26,7 +26,7 @@ out vec4 v_color;
 out vec3 v_affine_uv;
 // Distance from vertex to camera for fog
 out float v_dist;
-out float v_ao;
+out vec3 v_bentNormal;
 
 // Simple directional light
 const vec3 lightDir = vec3(0.0, 0.0, -2.0);
@@ -48,8 +48,9 @@ void main() {
     vec3 world_normal = normalize(mat3(u_model) * a_normal);
     float light = 0.3 + max(0.0, dot(world_normal, normalize(lightDir))) * 0.7;
     v_color = vec4(vec3(light), 1.0) * a_color0; // Premultiply it with color from vertex
-    // Also pass Ambient Occlusion to fragment
-    v_ao = a_ao;
+    // Also pass Bent Normal Ambient Occlusion to fragment
+    // By transforming the bent normal into world space, like geometric normal
+    v_bentNormal = normalize(mat3(u_model) * a_bentNormal);
 
     // --- 3. Fog Calculation ---
     vec3 world_pos = (u_model * vec4(a_position.xyz, 1.0)).xyz;
@@ -75,20 +76,21 @@ layout(binding = 1) uniform fs_params {
     float u_fogFar;
     vec2 u_ditherSize;
     // --- Artistic Control based on AO Uniforms ---
-    float u_aoShadowStrength; // Darkening effect (normal AO) - Multiply
-    float u_aoDirtStrength; // Detail color effect - Detail (blood, wet, snow)
-    float u_aoTintStrength; // Environment blend effect - Blend (sky ambient blue, cave fungi ambient)
-    float u_aoIntensity;
-    vec3 u_aoDetailColor;
-    vec3 u_aoBaseColor;
-    vec2 u_aoDirtRange; // x=start, y=end
-    vec2 u_aoTintRange; // x=start, y=end
+    float u_aoShadowStrength;
+    vec3 u_skyLightColor;
+    float u_skyLightIntensity;
+    vec3 u_groundLightColor;
+    float u_groundLightIntensity;
 };
+
+// World-space light directions
+const vec3 SKY_DIR = vec3(0.0, 1.0, 0.0);
+const vec3 GROUND_DIR = vec3(0.0, -1.0, 0.0);
 
 in vec4 v_color;
 in vec3 v_affine_uv;
 in float v_dist;
-in float v_ao;
+in vec3 v_bentNormal;
 
 out vec4 frag_color;
 
@@ -138,26 +140,24 @@ void main() {
     vec3 final_color = base_color;
 
     // --- 3. Layered Ambient Occlusion ---
+    // With Bent Normal Lighting
 
-    // Layer 1: Core Shadows (Multiply)
-    // Apply the core darkening effect first - fundamental based on occlusion
-    //float shadow_ao = clamp(v_ao * u_aoShadowStrength, 0.0, 1.0); // or without clamping
-    float shadow_factor = v_ao * u_aoShadowStrength;
-    final_color *= (1.0 - shadow_factor);
+    // The length of the bent normal naturally gives us the occlusion amount
+    // 1.0 = fully open, 0.0 = fully occluded
+    float accessibility = length(v_bentNormal);
+    float occlusion = 1.0 - accessibility;
 
-    // Layer 2: Environment Tint (Non-destructive Blend)
-    // This tints un-occluded areas with the environment's ambient light.
-    // We remap (1.0 - v_ao) to control which "exposed" areas get tinted.
-    float tint_remapped = smoothstep(u_aoTintRange.x, u_aoTintRange.y, 1.0 - v_ao);
-    float tint_factor = tint_remapped * u_aoTintStrength;
-    final_color = mix(final_color, u_aoBaseColor, tint_factor);
+    // Layer 1. Apply standard ambient occlusion shadows.
+    final_color *= (1.0 - occlusion * u_aoShadowStrength);
 
-    // Layer 3: Dirt (Non-destructuve Blend - Detail)
-    // This adds a detail color into the occluded crevices.
-    // We remap v_ao to precisely control where the dirt appears.
-    float dirt_remapped = smoothstep(u_aoDirtRange.x, u_aoDirtRange.y, v_ao);
-    float dirt_factor = dirt_remapped * u_aoDirtStrength;
-    final_color = mix(final_color, u_aoDetailColor, dirt_factor);
+    // Layer 2. Add directional light from the sky
+    // The dot product checks how much the "open" direction aligns with the sky direction
+    float sky_influence = max(0.0, dot(v_bentNormal, SKY_DIR));
+    final_color += u_skyLightColor * sky_influence * u_skyLightIntensity;
+
+    // Layer 3. Add directional bounce light from the ground
+    float ground_influence = max(0.0, dot(v_bentNormal, GROUND_DIR));
+    final_color += u_groundLightColor * ground_influence * u_groundLightIntensity;
 
     // --- 4. Color Quantization and Dithering ---
     final_color = quantize_and_dither(final_color, gl_FragCoord.xy, u_ditherSize.xy);
