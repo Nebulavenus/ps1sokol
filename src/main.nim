@@ -849,14 +849,23 @@ proc loadTexture(textureNamePath: string): sg.Image =
 
 type PlayerVehicle = object
   position: Vec3
+  velocity: Vec3
   rotation: Mat4
   yaw: float32
+  angularVelocity: float32
+
+type InputState = object
+  accelerate: bool
+  brake: bool
+  turnLeft: bool
+  turnRight: bool
 
 type State = object
   pip: Pipeline
   passAction: sg.PassAction
   mesh: Mesh # Track mesh
   carMesh: Mesh # Player's car mesh
+  input: InputState
   player: PlayerVehicle
   cameraPos: Vec3 # Camera's actual world position
   cameraTarget: Vec3 # Point the camera is looking at
@@ -970,7 +979,9 @@ proc init() {.cdecl.} =
 
   # --- Setup camera & player ---
   state.player.position = vec3(0.0, 0.0, 0.0)
+  state.player.velocity = vec3(0, 0, 0)
   state.player.yaw = 0.0
+  state.player.angularVelocity = 0.0
   state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
 
   # Camera a bit behind the player
@@ -1008,7 +1019,7 @@ proc computeFsParams(): shd.FsParams =
 
 proc updateCamera(dt: float32) =
   # -- Constants to tweak the camera feel --
-  const camOffset = vec3(0.0, 5.0, -8.0) # How far behind and above the car
+  const camOffset = vec3(0.0, 5.0, 8.0) # How far behind and above the car
   const targetOffset = vec3(0.0, 1.0, 0.0)  # Look slightly above the car's pivot
   const followSpeed = 5.0 # How quickly the camera catches up (higher is tighter)
 
@@ -1031,7 +1042,51 @@ proc frame() {.cdecl.} =
 
   # --- Logic ---
   # 1. Update player rotation matrix based on yaw from input
-  state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+  block VehiclePhysics:
+    # --- Constants to Tweak ---
+    const engineForce = 20.0    # How much power the engine has
+    const turningTorque = 60.0   # How quickly the car can start to turn
+    const brakeForce = 12.0    # How powerful the brakes are
+    const drag = 0.5            # Air resistance, slows down at high speed
+    const angularDrag = 5.0     # Stops the car from spinning forever
+    const grip = 2.0            # How much the tires "grip" to turn the car's velocity
+
+    # --- APPLY FORCES FROM INPUT ---
+    let forwardDir = state.player.rotation * vec3(0, 0, -1)
+
+    if state.input.accelerate:
+      state.player.velocity += forwardDir * engineForce * dt
+
+    if state.input.brake:
+      # Brakes are more effective if they oppose the current velocity
+      if len(state.player.velocity) > 0.1:
+        state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
+
+    if state.input.turnLeft:
+      state.player.angularVelocity += turningTorque * dt
+
+    if state.input.turnRight:
+      state.player.angularVelocity -= turningTorque * dt
+    # --- END INPUT FORCES ---
+
+    # 1. Apply Drag/Friction
+    state.player.velocity = state.player.velocity * (1.0 - (drag * dt))
+    state.player.angularVelocity = state.player.angularVelocity * (1.0 - (angularDrag * dt))
+
+    # 2. Update Rotation and Position from Velocities
+    state.player.yaw += state.player.angularVelocity * dt
+    state.player.position += state.player.velocity * dt
+    state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+
+    # 3. Align Velocity with Forward Direction (The "Grip" part)
+    # This is the magic that makes the car feel like it's driving, not just floating.
+    # It gradually turns the car's momentum vector to match the way the car is pointing.
+    let currentSpeed = len(state.player.velocity)
+    # Lerp the current velocity direction towards the car's forward direction
+    let newVelocityDir = norm(lerpV(norm(state.player.velocity), forwardDir, clamp(grip * dt, 0.0, 1.0)))
+    # Re-apply the speed to the new direction
+    if currentSpeed > 0.01: # Avoid issues with normalizing a zero vector
+        state.player.velocity = newVelocityDir * currentSpeed
 
   # 2. Update the camera's position to follow the player
   updateCamera(dt)
@@ -1092,25 +1147,23 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
   ]#
 
   # Keyboard
-  if e.`type` == EventType.eventTypeKeyDown:
-    let moveSpeed = 0.2 # Speed of the car
-    let rotSpeed = 0.5 # How fast car turns
-
+  if e.`type` == EventType.eventTypeKeyDown or e.`type` == EventType.eventTypeKeyUp:
+    # AO control
     let step: float32 = 0.05 # Use a smaller step for finer control
 
-    let forwardVec = norm(vec3(sin(state.player.yaw), 0.0, -cos(state.player.yaw)))
+    let isDown = e.`type` == EventType.eventTypeKeyDown
 
     case e.keyCode
     of keyCodeEscape:
       sapp.requestQuit()
     of keyCodeW: # Accelerate
-      state.player.position -= forwardVec * moveSpeed
+      state.input.accelerate = isDown
     of keyCodeS: # Brake/Rverese
-      state.player.position += forwardVec * moveSpeed
+      state.input.brake = isDown
     of keyCodeA: # Steer Left
-      state.player.yaw += rotSpeed
+      state.input.turnLeft = isDown
     of keyCodeD: # Steer Right
-      state.player.yaw -= rotSpeed
+      state.input.turnRight = isDown
     # -- AO realtime controlling --
     of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step); echo "Shadow Str: ", state.aoShadowStrength
     of keyCode2: state.aoShadowStrength += step; echo "Shadow Str: ", state.aoShadowStrength
