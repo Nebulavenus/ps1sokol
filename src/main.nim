@@ -1114,7 +1114,7 @@ proc frame() {.cdecl.} =
 
       # --- Calculate Speed and Acceleration for Audio ---
       let carAccel = (currentSpeed - len(prevVelocity)) / dt
-      updateEngineSound(currentSpeed, carAccel)
+      updateEngineSound(currentSpeed, carAccel, state.input.drift)
 
       # Handle zero velocity for norm() safely for lerp's first argument
       # If speed is very low, assume velocity direction is forward to avoid NaN from norm(zero_vec)

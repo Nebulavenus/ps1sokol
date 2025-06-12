@@ -21,6 +21,12 @@ const
   # Tune these to shape the high-rev sound
   HARMONIC_LEVELS_HIGH_RPM = [0.6, 0.7, 0.8]
 
+  # --- New Drift Sound Parameters ---
+  DRIFT_RPM_BOOST = 800.0        # How much RPM boosts when drifting
+  MAX_SCREECH_VOLUME = 0.6       # Max volume of the tire screech
+  SCREECH_ATTACK_SPEED = 10.0    # How fast screech volume ramps up
+  SCREECH_DECAY_SPEED = 2.0      # How fast screech volume ramps down
+
 type
   AudioState = object
     oscillatorPhases: array[MAX_HARMONICS, float32] # Each harmonic needs its own phase
@@ -32,7 +38,8 @@ type
 
     # Per-harmonic volumes, interpolated dynamically
     harmonicsVolumes: array[MAX_HARMONICS, float32]
-    noiseVolume: float32     # Volume of the noise component
+    engineNoiseVolume: float32     # Volume of the noise component
+    currentScreechVolume: float32  # ADD THIS: Current volume of the tire screech
     # Optional: Perlin noise state for smoother noise
     # PerlinPhase: float32
 
@@ -54,19 +61,26 @@ proc audioInit*() =
   audioState.currentRpm = 0.0
   audioState.engineFrequency = 0.0
   audioState.engineVolume = 0.0
-  audioState.noiseVolume = 0.0
+  audioState.engineNoiseVolume = 0.0
+  audioState.currentScreechVolume = 0.0
 
 proc audioShutdown*() =
   saudio.shutdown()
 
-proc updateEngineSound*(carSpeed: float32, carAccel: float32) =
+proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool) =
   # Map car speed to target RPM (adjust these ranges to taste)
   const minRpm = 1000.0 # Idle RPM
   const maxRpm = 6000.0 # Max RPM
   const maxSpeed = 10.0 # Max speed of the car for full RPM
 
   # A simple mapping of speed to a target RPM
-  audioState.targetRpm = minRpm + (maxRpm - minRpm) * clamp(abs(carSpeed) / maxSpeed, 0.0, 1.0)
+  var baseTargetRpm = minRpm + (maxRpm - minRpm) * clamp(abs(carSpeed) / maxSpeed, 0.0, 1.0)
+
+  # --- ADD DRIFT RPM BOOST ---
+  if isDrifting:
+    baseTargetRpm = min(maxRpm, baseTargetRpm + DRIFT_RPM_BOOST) # Boost RPM, but don't exceed maxRpm
+  audioState.targetRpm = baseTargetRpm
+  # --- END DRIFT RPM BOOST ---
 
   # Smoothly interpolate current RPM towards target RPM for less jarring changes
   const rpmSmoothingFactor = 2.0 # How fast currentRpm catches up to targetRpm
@@ -86,12 +100,12 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32) =
     audioState.harmonicsVolumes[i] = lerp(HARMONIC_LEVELS_LOW_RPM[i], HARMONIC_LEVELS_HIGH_RPM[i], blendFactor)
 
   # Noise increases with RPM (more mechanical noise at higher revs)
-  audioState.noiseVolume = 0.05 + 0.15 * blendFactor
-  audioState.noiseVolume = clamp(audioState.noiseVolume, 0.0, 0.2) # Clamp noise to prevent it dominating
+  audioState.engineNoiseVolume = 0.05 + 0.15 * blendFactor
+  audioState.engineNoiseVolume = clamp(audioState.engineNoiseVolume, 0.0, 0.2) # Clamp noise to prevent it dominating
 
   # Modulate overall volume based on acceleration and speed
   const baseVolume = 0.2
-  const accelVolumeBoost = 0.4 # How much acceleration impacts volume
+  const accelVolumeBoost = 0.5 # How much acceleration impacts volume
   const minSpeedVolume = 0.1 # Minimum volume even when stopped
 
   # Basic volume scales with speed
@@ -100,6 +114,12 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32) =
   # Boost volume on acceleration
   let finalVolume = speedVolume + clamp(carAccel * accelVolumeBoost, 0.0, 0.8)
   audioState.engineVolume = clamp(finalVolume, 0.0, 1.0)
+
+  # --- ADD DRIFTING SCREECH VOLUME LOGIC ---
+  let targetScreechVolume = if isDrifting and abs(carSpeed) > 0.5: MAX_SCREECH_VOLUME else: 0.0
+  let smoothingSpeed = if isDrifting: SCREECH_ATTACK_SPEED else: SCREECH_DECAY_SPEED
+  audioState.currentScreechVolume = lerp(audioState.currentScreechVolume, targetScreechVolume, clamp(sapp.frameDuration() * smoothingSpeed, 0.0, 1.0))
+  # --- END DRIFTING SCREECH VOLUME LOGIC ---
 
 proc audioGenerateSamples*() =
   let expectedFrames = saudio.expect()
@@ -126,7 +146,12 @@ proc audioGenerateSamples*() =
         audioState.oscillatorPhases[h] += 1.0
 
     # Add a white noise component
-    totalSample += (rand(-1.0..1.0) * audioState.noiseVolume)
+    totalSample += (rand(-1.0..1.0) * audioState.engineNoiseVolume)
+
+    # --- ADD SCREECH NOISE COMPONENT ---
+    # Tire screech is pure noise, its volume controlled by currentScreechVolume
+    totalSample += (rand(-1.0..1.0) * audioState.currentScreechVolume)
+    # --- END SCREECH NOISE ---
 
     # Apply overall engine volume
     totalSample *= audioState.engineVolume
