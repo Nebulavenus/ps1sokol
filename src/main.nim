@@ -970,7 +970,7 @@ proc init() {.cdecl.} =
   let trackTexture = loadTexture("assets/track.qoi")
   var mesh = loadAndProcessMesh(trackPath, aoParams, trackTexture, pointSmp)
 
-  let carTexture = loadTexture("assets/car.qoi")
+  let carTexture = loadTexture("assets/car2.qoi")
   var carMesh = loadAndProcessMesh(carPath, aoParams, carTexture, pointSmp)
 
   # Don't forget to save it in state
@@ -1044,11 +1044,11 @@ proc frame() {.cdecl.} =
   # 1. Update player rotation matrix based on yaw from input
   block VehiclePhysics:
     # --- Constants to Tweak ---
-    const engineForce = 20.0    # How much power the engine has
+    const engineForce = 15.0    # How much power the engine has
     const turningTorque = 60.0   # How quickly the car can start to turn
-    const brakeForce = 12.0    # How powerful the brakes are
-    const drag = 0.5            # Air resistance, slows down at high speed
-    const angularDrag = 5.0     # Stops the car from spinning forever
+    const brakeForce = 5.0    # How powerful the brakes are
+    const drag = 0.9            # Air resistance, slows down at high speed
+    const angularDrag = 1.3     # Stops the car from spinning forever
     const grip = 2.0            # How much the tires "grip" to turn the car's velocity
 
     # --- APPLY FORCES FROM INPUT ---
@@ -1062,11 +1062,12 @@ proc frame() {.cdecl.} =
       if len(state.player.velocity) > 0.1:
         state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
 
+    let turnFactor = pow(len(state.player.velocity) / 10, 2)
     if state.input.turnLeft:
-      state.player.angularVelocity += turningTorque * dt
+      state.player.angularVelocity += turningTorque * dt * turnFactor
 
     if state.input.turnRight:
-      state.player.angularVelocity -= turningTorque * dt
+      state.player.angularVelocity -= turningTorque * dt * turnFactor
     # --- END INPUT FORCES ---
 
     # 1. Apply Drag/Friction
