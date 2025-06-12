@@ -721,6 +721,8 @@ type State = object
   aoTintStrength: float32
   aoDetailColor: Vec3
   aoBaseColor: Vec3
+  aoDirtRange: Vec2
+  aoTintRange: Vec2
 
 var state: State
 
@@ -844,11 +846,11 @@ proc init() {.cdecl.} =
   var mesh: Mesh
 
   let assetDir = getAppDir() & DirSep
-  let modelPath = assetDir & "bs_rest.obj"
+  let modelPath = assetDir & "bs_rest.ply"
 
   # Define AO parameters
   let aoParams = AOBakeParams(
-    numRays: 64,
+    numRays: 256,
     maxDistance: 2.0,
     intensity: 1.0,
     bias: 0.001,
@@ -859,8 +861,12 @@ proc init() {.cdecl.} =
   state.aoDirtStrength = 0.0
   state.aoTintStrength = 0.0
 
-  state.aoDetailColor = vec3(0.2, 0.1, 0.05) # "dirt"
-  state.aoBaseColor = vec3(0.1, 0.1, 0.2) # Cool ambient
+  state.aoDetailColor = vec3(0.2, 0.1, 0.05) # "dirt" color
+  state.aoBaseColor = vec3(0.1, 0.1, 0.2) # Cool ambient tint
+
+  # Set default range to [0, 1], which is linear mapping
+  state.aoDirtRange = vec2(0.0, 1.0)
+  state.aoTintRange = vec2(0.0, 1.0)
 
   # Load the mesh. One function handles everything
   mesh = loadAndProcessMesh(modelPath, aoParams, qoiTexture, texcubeSmp)
@@ -913,7 +919,9 @@ proc computeFsParams(): shd.FsParams =
     u_aoDirtStrength: state.aoDirtStrength,
     u_aoTintStrength: state.aoTintStrength,
     u_aoDetailColor: state.aoDetailColor,
-    u_aoBaseColor: state.aoBaseColor
+    u_aoBaseColor: state.aoBaseColor,
+    u_aoDirtRange: state.aoDirtRange,
+    u_aoTintRange: state.aoTintRange,
   )
 
 proc frame() {.cdecl.} =
@@ -955,6 +963,8 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
     let forwardVec = vec3(sin(state.camYaw), 0.0, -cos(state.camYaw))
     let rightVec = vec3(forwardVec.z, 0.0, -forwardVec.x)
 
+    let step: float32 = 0.05 # Use a smaller step for finer control
+
     case e.keyCode
     of keyCodeEscape:
       sapp.requestQuit()
@@ -972,26 +982,19 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
       state.camPos.y -= moveSpeed
     # -- AO realtime controlling --
     # --- Shadow Strength Control ---
-    of keyCode1:
-      state.aoShadowStrength = max(0.0, state.aoShadowStrength - 0.1)
-      echo "Shadow Strength: ", state.aoShadowStrength
-    of keyCode2:
-      state.aoShadowStrength += 0.1
-      echo "Shadow Strength: ", state.aoShadowStrength
-    # --- Dirt Strength Control ---
-    of keyCode3:
-      state.aoDirtStrength = max(0.0, state.aoDirtStrength - 0.1)
-      echo "Dirt Strength: ", state.aoDirtStrength
-    of keyCode4:
-      state.aoDirtStrength += 0.1
-      echo "Dirt Strength: ", state.aoDirtStrength
-    # --- Tint Strength Control ---
-    of keyCode5:
-      state.aoTintStrength = max(0.0, state.aoTintStrength - 0.1)
-      echo "Tint Strength: ", state.aoTintStrength
-    of keyCode6:
-      state.aoTintStrength += 0.1
-      echo "Tint Strength: ", state.aoTintStrength
+    # --- Strength Controls ---
+    of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step*2); echo "Shadow Str: ", state.aoShadowStrength
+    of keyCode2: state.aoShadowStrength += step*2; echo "Shadow Str: ", state.aoShadowStrength
+    of keyCode3: state.aoDirtStrength = max(0.0, state.aoDirtStrength - step*2); echo "Dirt Str: ", state.aoDirtStrength
+    of keyCode4: state.aoDirtStrength += step*2; echo "Dirt Str: ", state.aoDirtStrength
+    of keyCode5: state.aoTintStrength = max(0.0, state.aoTintStrength - step*2); echo "Tint Str: ", state.aoTintStrength
+    of keyCode6: state.aoTintStrength += step*2; echo "Tint Str: ", state.aoTintStrength
+
+    # --- Dirt Gradient Range Controls ---
+    of keyCode7: state.aoDirtRange.x = max(0.0, state.aoDirtRange.x - step); echo "Dirt Range Start: ", state.aoDirtRange.x
+    of keyCode8: state.aoDirtRange.x = min(state.aoDirtRange.y, state.aoDirtRange.x + step); echo "Dirt Range Start: ", state.aoDirtRange.x
+    of keyCode9: state.aoDirtRange.y = max(state.aoDirtRange.x, state.aoDirtRange.y - step); echo "Dirt Range End: ", state.aoDirtRange.y
+    of keyCode0: state.aoDirtRange.y = min(1.0, state.aoDirtRange.y + step); echo "Dirt Range End: ", state.aoDirtRange.y
     else: discard
 
 # main

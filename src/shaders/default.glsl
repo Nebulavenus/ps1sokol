@@ -74,13 +74,15 @@ layout(binding = 1) uniform fs_params {
     float u_fogNear;
     float u_fogFar;
     vec2 u_ditherSize;
-    // --- AO Uniforms ---
+    // --- Artistic Control based on AO Uniforms ---
     float u_aoShadowStrength; // Darkening effect (normal AO) - Multiply
     float u_aoDirtStrength; // Detail color effect - Detail (blood, wet, snow)
     float u_aoTintStrength; // Environment blend effect - Blend (sky ambient blue, cave fungi ambient)
     float u_aoIntensity;
     vec3 u_aoDetailColor;
     vec3 u_aoBaseColor;
+    vec2 u_aoDirtRange; // x=start, y=end
+    vec2 u_aoTintRange; // x=start, y=end
 };
 
 in vec4 v_color;
@@ -137,21 +139,25 @@ void main() {
 
     // --- 3. Layered Ambient Occlusion ---
 
-    // Layer 1: Shadows (Multiply)
-    // Apply the core darkening effect first
-    float shadow_ao = clamp(v_ao * u_aoShadowStrength, 0.0, 1.0);
-    final_color *= (1.0 - shadow_ao);
+    // Layer 1: Core Shadows (Multiply)
+    // Apply the core darkening effect first - fundamental based on occlusion
+    //float shadow_ao = clamp(v_ao * u_aoShadowStrength, 0.0, 1.0); // or without clamping
+    float shadow_factor = v_ao * u_aoShadowStrength;
+    final_color *= (1.0 - shadow_factor);
 
-    // Layer 2: Environment Tint (Blend)
-    // Lerp between the now-shadowed color and the environment base color
-    // Unoccluded areas (where v_ao is low) are tinted the most
-    float tint_factor = clamp((1.0 - v_ao) * u_aoTintStrength, 0.0, 1.0);
+    // Layer 2: Environment Tint (Non-destructive Blend)
+    // This tints un-occluded areas with the environment's ambient light.
+    // We remap (1.0 - v_ao) to control which "exposed" areas get tinted.
+    float tint_remapped = smoothstep(u_aoTintRange.x, u_aoTintRange.y, 1.0 - v_ao);
+    float tint_factor = tint_remapped * u_aoTintStrength;
     final_color = mix(final_color, u_aoBaseColor, tint_factor);
 
-    // Layer 3: Dirt (Detail)
-    // Add the detail color on top of everything else
-    float dirt_ao = clamp(v_ao * u_aoDirtStrength, 0.0, 1.0);
-    final_color += dirt_ao * u_aoDetailColor;
+    // Layer 3: Dirt (Non-destructuve Blend - Detail)
+    // This adds a detail color into the occluded crevices.
+    // We remap v_ao to precisely control where the dirt appears.
+    float dirt_remapped = smoothstep(u_aoDirtRange.x, u_aoDirtRange.y, v_ao);
+    float dirt_factor = dirt_remapped * u_aoDirtStrength;
+    final_color = mix(final_color, u_aoDetailColor, dirt_factor);
 
     // --- 4. Color Quantization and Dithering ---
     final_color = quantize_and_dither(final_color, gl_FragCoord.xy, u_ditherSize.xy);
