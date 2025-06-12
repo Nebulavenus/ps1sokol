@@ -60,3 +60,15 @@ proc cross*(v0: Vec3, v1: Vec3): Vec3 =
     y: (v0.z * v1.x) - (v0.x * v1.z),
     z: (v0.x * v1.y) - (v0.y * v1.x),
   )
+
+proc minV*(a, b: Vec3): Vec3 {.inline.} =
+  ## Returns a new Vec3 with the component-wise minimum of two vectors.
+  result.x = min(a.x, b.x)
+  result.y = min(a.y, b.y)
+  result.z = min(a.z, b.z)
+
+proc maxV*(a, b: Vec3): Vec3 {.inline.} =
+  ## Returns a new Vec3 with the component-wise maximum of two vectors.
+  result.x = max(a.x, b.x)
+  result.y = max(a.y, b.y)
+  result.z = max(a.z, b.z)

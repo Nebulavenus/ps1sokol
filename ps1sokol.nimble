@@ -37,7 +37,7 @@ proc backendSwitch(): string =
       return ""
 
 proc build() =
-  exec &"nim c --outdir:build/ {compilerSwitch()} {backendSwitch()} src/main"
+  exec &"nim c -d:release --outdir:build/ {compilerSwitch()} {backendSwitch()} src/main"
 
 proc buildDebug() =
   exec &"nim c -d:debug --debugger:native --outdir:build/ {compilerSwitch()} {backendSwitch()} src/main"
