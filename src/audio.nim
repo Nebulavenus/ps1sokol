@@ -23,29 +23,31 @@ const
 
   # --- New Drift Sound Parameters ---
   DRIFT_RPM_BOOST = 800.0        # How much RPM boosts when drifting
-  MAX_SCREECH_VOLUME = 0.6       # Max volume of the tire screech
-  SCREECH_ATTACK_SPEED = 10.0    # How fast screech volume ramps up
-  SCREECH_DECAY_SPEED = 2.0      # How fast screech volume ramps down
+  MAX_SCREECH_VOLUME = 0.8       # INCREASE THIS: Max volume of the tire screech (try 0.8 or 1.0)
+  SCREECH_ATTACK_SPEED = 20.0    # INCREASE THIS: How fast screech volume ramps up (make it punchier)
+  SCREECH_DECAY_SPEED = 5.0      # INCREASE THIS: How fast screech volume ramps down (so it lingers a bit)
+
+  SCREECH_BASE_FREQ = 1200.0     # Base frequency of the screech sound (e.g., 1200 Hz)
+  SCREECH_FREQ_JITTER = 300.0    # How much the screech frequency can randomly vary
+  SCREECH_NOISE_MIX = 0.4        # How much white noise to mix with the high-freq tone (0.0 to 1.0)
 
 type
   AudioState = object
     oscillatorPhases: array[MAX_HARMONICS, float32] # Each harmonic needs its own phase
-    # For a driving sound:
-    targetRpm: float32       # Current target RPM (derived from car speed/acceleration)
-    currentRpm: float32      # Smoothly interpolated RPM
-    engineFrequency: float32 # Current base frequency of the engine sound (fundamental)
-    engineVolume: float32    # Overall volume of the engine sound
 
-    # Per-harmonic volumes, interpolated dynamically
+    targetRpm: float32
+    currentRpm: float32
+    engineFrequency: float32
+    engineVolume: float32
+
     harmonicsVolumes: array[MAX_HARMONICS, float32]
-    engineNoiseVolume: float32     # Volume of the noise component
-    currentScreechVolume: float32  # ADD THIS: Current volume of the tire screech
-    # Optional: Perlin noise state for smoother noise
-    # PerlinPhase: float32
+    engineNoiseVolume: float32
+
+    currentScreechVolume: float32
+    screechPhase: float32          # ADD THIS: Phase for the screech oscillator
 
 var audioState: AudioState
 var audioSamples: array[SAUDIO_NUM_SAMPLES, float32] # Buffer for samples
-
 
 proc lerp*(a, b: float32, t: float32): float32 {.inline.} =
   return a + (b - a) * t
@@ -63,6 +65,7 @@ proc audioInit*() =
   audioState.engineVolume = 0.0
   audioState.engineNoiseVolume = 0.0
   audioState.currentScreechVolume = 0.0
+  audioState.screechPhase = 0.0 # Initialize screech phase
 
 proc audioShutdown*() =
   saudio.shutdown()
@@ -130,28 +133,44 @@ proc audioGenerateSamples*() =
   for i in 0..<framesToGenerate:
     var totalSample = 0.0
 
-    # Sum up harmonic components
+    # Sum up harmonic components (Engine base sound)
     for h in 0..<MAX_HARMONICS:
-      # Generate a sawtooth wave for each harmonic
       let harmonicSample = (2.0 * (audioState.oscillatorPhases[h] - floor(audioState.oscillatorPhases[h])) - 1.0)
       totalSample += harmonicSample * audioState.harmonicsVolumes[h]
 
-      # Update phase for next sample for this harmonic
       audioState.oscillatorPhases[h] += (audioState.engineFrequency * HARMONIC_FREQS[h]) / SAUDIO_SAMPLE_RATE
 
-      # Wrap phase around 1.0
       if audioState.oscillatorPhases[h] >= 1.0:
         audioState.oscillatorPhases[h] -= 1.0
-      elif audioState.oscillatorPhases[h] < 0.0: # In case of negative frequency or other anomalies
+      elif audioState.oscillatorPhases[h] < 0.0:
         audioState.oscillatorPhases[h] += 1.0
 
-    # Add a white noise component
+    # Add engine noise component
     totalSample += (rand(-1.0..1.0) * audioState.engineNoiseVolume)
 
-    # --- ADD SCREECH NOISE COMPONENT ---
-    # Tire screech is pure noise, its volume controlled by currentScreechVolume
-    totalSample += (rand(-1.0..1.0) * audioState.currentScreechVolume)
-    # --- END SCREECH NOISE ---
+    # --- ENHANCED SCREECH NOISE COMPONENT ---
+    if audioState.currentScreechVolume > 0.001: # Only generate if audible
+      # Calculate current screech frequency with jitter
+      let currentScreechFreq = SCREECH_BASE_FREQ + (rand(-1.0..1.0) * SCREECH_FREQ_JITTER)
+
+      # Generate a high-frequency sawtooth tone for the "whine" part of the screech
+      let screechTone = (2.0 * (audioState.screechPhase - floor(audioState.screechPhase)) - 1.0)
+
+      # Generate white noise for the "hiss" part
+      let screechNoise = rand(-1.0..1.0)
+
+      # Mix the tone and noise
+      let mixedScreechSample = (screechTone * (1.0 - SCREECH_NOISE_MIX) + screechNoise * SCREECH_NOISE_MIX)
+
+      totalSample += mixedScreechSample * audioState.currentScreechVolume
+
+      # Update screech phase (using the jittered frequency)
+      audioState.screechPhase += currentScreechFreq / SAUDIO_SAMPLE_RATE
+      if audioState.screechPhase >= 1.0:
+        audioState.screechPhase -= 1.0
+      elif audioState.screechPhase < 0.0:
+        audioState.screechPhase += 1.0
+    # --- END ENHANCED SCREECH NOISE ---
 
     # Apply overall engine volume
     totalSample *= audioState.engineVolume
