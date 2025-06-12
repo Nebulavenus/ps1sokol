@@ -76,3 +76,7 @@ proc maxV*(a, b: Vec3): Vec3 {.inline.} =
   result.x = max(a.x, b.x)
   result.y = max(a.y, b.y)
   result.z = max(a.z, b.z)
+
+proc lerpV*(a, b: Vec3, t: float32): Vec3 {.inline.} =
+  ## Linearly interpolates between two vectors
+  return a + (b - a) * t

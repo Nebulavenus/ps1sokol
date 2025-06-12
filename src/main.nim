@@ -803,17 +803,65 @@ proc loadAndProcessMesh(modelPath: string, aoParams: AOBakeParams, texture: Imag
   else:
     echo "Error: No vertex data to upload to GPU."
 
+proc loadTexture(textureNamePath: string): sg.Image =
+  # load qoi texture
+  var qoiImage: QOIF
+  try:
+    qoiImage = readQOI(textureNamePath)
+    #qoiImage = readQOI("assets/malenia.qoi")
+    echo "Success loaded qoi: " & textureNamePath, qoiImage.header.width, "-", qoiImage.header.height
+  except Exception as e:
+    echo "Error loading qoi"
+    requestQuit()
+
+  var finalPixelData: seq[byte]
+  var finalPixelFormat: sg.PixelFormat
+  if qoiImage.header.channels == qoi.RGBA:
+    finalPixelData = qoiImage.data
+    finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
+  else:
+    # Conversion required
+    finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
+    let numPixels = qoiImage.header.width.int * qoiImage.header.height.int
+    finalPixelData = newSeq[byte](numPixels * 4)
+    # Write data
+    var srcIndex = 0
+    var dstIndex = 0
+    for i in 0 ..< numPixels:
+      # Copy R, G, B
+      finalPixelData[dstIndex]   = qoiImage.data[srcIndex]     # R
+      finalPixelData[dstIndex+1] = qoiImage.data[srcIndex+1]   # G
+      finalPixelData[dstIndex+2] = qoiImage.data[srcIndex+2]   # B
+      # Add the Alpha channel
+      finalPixelData[dstIndex+3] = 255.byte                   # A (fully opaque)
+
+      srcIndex += 3
+      dstIndex += 4
+
+  result = sg.makeImage(sg.ImageDesc(
+    width: qoiImage.header.width.int32,
+    height: qoiImage.header.height.int32,
+    pixelFormat: finalPixelFormat,
+    data: ImageData(
+      subimage: [ [ sg.Range(addr: finalPixelData[0].addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
+    )
+  ))
+
+type PlayerVehicle = object
+  position: Vec3
+  rotation: Mat4
+  yaw: float32
+
 type State = object
   pip: Pipeline
   passAction: sg.PassAction
-  mesh: Mesh
-  camTime: float32
-  camPos: Vec3
-  camYaw: float32
-  camPitch: float32
+  mesh: Mesh # Track mesh
+  carMesh: Mesh # Player's car mesh
+  player: PlayerVehicle
+  cameraPos: Vec3 # Camera's actual world position
+  cameraTarget: Vec3 # Point the camera is looking at
   vsParams: VsParams
   fsParams: FsParams
-  rx, ry: float32
   # -- Controlling AO Multi-Layered --
   aoShadowStrength: float32
   skyLightColor: Vec3
@@ -852,69 +900,11 @@ proc init() {.cdecl.} =
     0xFF000000'u32, 0xFFFFFFFF'u32, 0xFF000000'u32, 0xFFFFFFFF'u32,
   ]
   #bindings.images[shd.imgTex] = sg.makeImage(sg.ImageDesc(
-  let texcubeImg = sg.makeImage(sg.ImageDesc(
+  let checkboardImg = sg.makeImage(sg.ImageDesc(
     width: 4,
     height: 4,
     data: ImageData(
       subimage: [ [ sg.Range(addr: pixels.addr, size: pixels.sizeof) ] ]
-    )
-  ))
-
-  # create a matching sampler
-  #bindings.samplers[shd.smpSmp] = sg.makeSampler(sg.SamplerDesc(
-  let texcubeSmp = sg.makeSampler(sg.SamplerDesc(
-    minFilter: filterNearest,
-    magFilter: filterNearest,
-  ));
-
-  # load qoi texture
-  var qoiImage: QOIF
-  try:
-    qoiImage = readQOI("assets/diffuse.qoi")
-    #qoiImage = readQOI("assets/malenia.qoi")
-    echo "Success loaded qoi: diffuse.qoi ", qoiImage.header.width, "-", qoiImage.header.height
-    echo "First byte is not null! ", qoiImage.data[160]
-    echo "Data is not null! ", qoiImage.data.len
-  except Exception as e:
-    echo "Error loading qoi"
-    requestQuit()
-
-  var finalPixelData: seq[byte]
-  var finalPixelFormat: sg.PixelFormat
-  if qoiImage.header.channels == qoi.RGBA:
-    finalPixelData = qoiImage.data
-    finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
-  else:
-    # Conversion required
-    finalPixelFormat = sg.PixelFormat.pixelFormatRgba8
-    let numPixels = qoiImage.header.width.int * qoiImage.header.height.int
-    finalPixelData = newSeq[byte](numPixels * 4)
-    # Write data
-    var srcIndex = 0
-    var dstIndex = 0
-    for i in 0 ..< numPixels:
-      # Copy R, G, B
-      finalPixelData[dstIndex]   = qoiImage.data[srcIndex]     # R
-      finalPixelData[dstIndex+1] = qoiImage.data[srcIndex+1]   # G
-      finalPixelData[dstIndex+2] = qoiImage.data[srcIndex+2]   # B
-      # Add the Alpha channel
-      finalPixelData[dstIndex+3] = 255.byte                   # A (fully opaque)
-
-      srcIndex += 3
-      dstIndex += 4
-
-  let qoiTexture = sg.makeImage(sg.ImageDesc(
-    width: qoiImage.header.width.int32,
-    height: qoiImage.header.height.int32,
-    pixelFormat: finalPixelFormat,
-    data: ImageData(
-      #subimage: [ [ sg.Range(addr: qoiImage.data[0].addr, size: qoiImage.data.sizeof) ] ]
-      #subimage: [ [ sg.Range(addr: qoiImage.data[0].addr, size: 16) ] ]
-      #subimage: [ [ sg.Range(addr: qoiImage.data[0].addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
-      #subimage: [ [ sg.Range(addr: finalPixelData[0].addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
-      #subimage: [ [ sg.Range(addr: finalPixelData.addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
-      subimage: [ [ sg.Range(addr: finalPixelData[0].addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
-      #subimage: [ [ sg.Range(addr: qoiImage.data[0].addr, size: qoiImage.data.sizeof) ] ]
     )
   ))
 
@@ -939,15 +929,15 @@ proc init() {.cdecl.} =
       writeEnabled: true,
     )
   ))
-  # save everything in mesh after processing it
-  var mesh: Mesh
 
+  # Load mesh & also preprocessing if needed
   let assetDir = getAppDir() & DirSep
-  let modelPath = assetDir & "bs_rest.ply"
+  let trackPath = assetDir & "track.ply"
+  let carPath = assetDir & "car.ply"
 
   # Define AO parameters
   let aoParams = AOBakeParams(
-    numRays: 256,
+    numRays: 32,
     maxDistance: 2.0,
     intensity: 1.0,
     bias: 0.001,
@@ -959,51 +949,54 @@ proc init() {.cdecl.} =
   state.groundLightColor = vec3(0.6, 0.4, 0.3) # Warm earthy ground bounce
   state.groundLightIntensity = 0.0
 
-  # Load the mesh. One function handles everything
-  mesh = loadAndProcessMesh(modelPath, aoParams, qoiTexture, texcubeSmp)
+  # create a matching sampler - for everything
+  let pointSmp = sg.makeSampler(sg.SamplerDesc(
+    minFilter: filterNearest,
+    magFilter: filterNearest,
+  ));
 
-  #mesh.bindings.images[shd.imgUTexture] = texcubeImg
-  #mesh.bindings.images[shd.imgUTexture] = qoiTexture
-  #mesh.bindings.samplers[shd.smpUSampler] = texcubeSmp
+  # Load the mesh. One function handles everything
+  #let trackTexture = loadTexture("assets/diffuse.qoi")
+  #let trackTexture = checkboardImg
+  let trackTexture = loadTexture("assets/track.qoi")
+  var mesh = loadAndProcessMesh(trackPath, aoParams, trackTexture, pointSmp)
+
+  let carTexture = loadTexture("assets/car.qoi")
+  var carMesh = loadAndProcessMesh(carPath, aoParams, carTexture, pointSmp)
+
+  # Don't forget to save it in state
   state.mesh = mesh
+  state.carMesh = carMesh
+
+  # --- Setup camera & player ---
+  state.player.position = vec3(0.0, 0.0, 0.0)
+  state.player.yaw = 0.0
+  state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+
+  # Camera a bit behind the player
+  state.cameraPos = vec3(0.0, 10.0, 2.0)
+  state.cameraTarget = state.player.position
 
 proc computeVsParams(): shd.VsParams =
-  let camStart = state.camPos + vec3(0.0, 2.5, 4.0)
-  let camEnd = state.camPos + vec3(0.0, 0.5, 12.0)
-  let dt = sapp.frameDuration()
-  let speed = 0.3 # cycles per second
-  state.camTime += dt
-  #let t = (1.0 + math.sin(2.0 * 3.14159 * speed * state.camTime)) / 2.0 # move sin [-1,1] to [0, 1]
-  #let camPos = camStart + (camEnd - camStart) * t
-  let camPos = state.camPos
+  let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 150.0f)
+  let view = lookat(state.cameraPos, state.cameraTarget, vec3.up())
 
-  let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 50.0f)
+  # This model matrix is for the static geometry (the track)
+  # If the track is already at the world origin, this is just the identity matrix
+  let model = mat4.identity()
 
-  # Calculate the camera's forward direction vector using spherical coordinates
-  let forwardVec = norm(vec3(
-    cos(state.camPitch) * sin(state.camYaw),
-    sin(state.camPitch),
-    cos(state.camPitch) * -cos(state.camYaw)
-  ))
-  let lookAtPoint = camPos + forwardVec
-  let view = lookat(camPos, lookAtPoint, vec3.up())
-
-  let rxm = rotate(state.rx, vec3(1f, 0f, 0f))
-  let rym = rotate(state.ry, vec3(0f, 1f, 0f))
-  let model = rxm * rym
   result = shd.VsParams(
     u_mvp: proj * view * model,
     u_model: model,
-    u_camPos: camPos,
+    u_camPos: state.cameraPos,
     u_jitterAmount: 240.0, # Simulate a 240p vertical resolution
-    #u_jitterAmount: 480.0, # Simulate a 240p vertical resolution
   )
 
 proc computeFsParams(): shd.FsParams =
   result = shd.FsParams(
     u_fogColor: vec3(0.25f, 0.5f, 0.75f),
     u_fogNear: 4.0f,
-    u_fogFar: 20.0f,
+    u_fogFar: 150.0f,
     u_ditherSize: vec2(320.0, 240.0), # Should be equal to window size
     # -- AO uniforms --
     u_aoShadowStrength: state.aoShadowStrength,
@@ -1013,20 +1006,71 @@ proc computeFsParams(): shd.FsParams =
     u_groundLightIntensity: state.groundLightIntensity
   )
 
+proc updateCamera(dt: float32) =
+  # -- Constants to tweak the camera feel --
+  const camOffset = vec3(0.0, 5.0, -8.0) # How far behind and above the car
+  const targetOffset = vec3(0.0, 1.0, 0.0)  # Look slightly above the car's pivot
+  const followSpeed = 5.0 # How quickly the camera catches up (higher is tighter)
+
+  # 1. Calculate the desired camera position in world space.
+  # We take the camera offset and rotate it by the car's rotation.
+  let desiredPos = state.player.position + (state.player.rotation * camOffset)
+
+  # 2. Calculate the desired look-at target.
+  let desiredTarget = state.player.position + targetOffset
+
+  # 3. Smoothly interpolate the camera's actual position towards the desired one.
+  # The `dt * followSpeed` makes the interpolation frame-rate independent.
+  let t = clamp(dt * followSpeed, 0.0, 1.0)
+  state.cameraPos = vec3.lerpV(state.cameraPos, desiredPos, t)
+  state.cameraTarget = vec3.lerpV(state.cameraTarget, desiredTarget, t)
+
 proc frame() {.cdecl.} =
-  let dt = sapp.frameDuration() * 60f
-  #state.rx += 1f * dt
-  #state.ry += 2f * dt
+  #let dt = sapp.frameDuration() * 60f
+  let dt = sapp.frameDuration()
 
-  let vsParams = computeVsParams()
+  # --- Logic ---
+  # 1. Update player rotation matrix based on yaw from input
+  state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+
+  # 2. Update the camera's position to follow the player
+  updateCamera(dt)
+
+  # --- Rendering ---
+  # 3. Common matrices and fragment shader uniforms
   let fsParams = computeFsParams()
+  let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 150.0f)
+  let view = lookat(state.cameraPos, state.cameraTarget, vec3.up())
 
+  # -- Similar models uses similar pipelines
   sg.beginPass(Pass(action: passAction, swapchain: sglue.swapchain()))
   sg.applyPipeline(state.pip)
-  sg.applyBindings(state.mesh.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
   sg.applyUniforms(shd.ubFsParams, sg.Range(addr: fsParams.addr, size: fsParams.sizeof))
+
+  # --- Draw track ---
+  let trackModel = identity()
+  var trackVsParams = shd.VsParams(
+    u_mvp: proj * view * trackModel,
+    u_model: trackModel,
+    u_camPos: state.cameraPos,
+    u_jitterAmount: 240.0,
+  )
+  sg.applyBindings(state.mesh.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
   sg.draw(0, state.mesh.indexCount, 1)
+
+  # --- Draw car ---
+  let carModel = translate(state.player.position) * state.player.rotation
+  var carVsParams = shd.VsParams(
+    u_mvp: proj * view * carModel,
+    u_model: carModel,
+    u_camPos: state.cameraPos,
+    u_jitterAmount: 240.0,
+  )
+  sg.applyBindings(state.carMesh.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
+  sg.draw(0, state.carMesh.indexCount, 1)
+
   sg.endPass()
   sg.commit()
 
@@ -1035,6 +1079,7 @@ proc cleanup() {.cdecl.} =
 
 proc event(e: ptr sapp.Event) {.cdecl.} =
   # Mouse
+  #[
   if e.`type` == EventType.eventTypeMouseMove:
     let mouseSensitivity = 0.005 # Adjust this value to your liking
     state.camYaw   += e.mouseDx * mouseSensitivity
@@ -1044,31 +1089,28 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
     const pitchLimit = 1.55 # ~89 degrees in radians
     if state.camPitch > pitchLimit: state.camPitch = pitchLimit
     if state.camPitch < -pitchLimit: state.camPitch = -pitchLimit
+  ]#
 
   # Keyboard
   if e.`type` == EventType.eventTypeKeyDown:
-    let moveSpeed = 0.5
-    let rotSpeed = 0.3
-    let forwardVec = vec3(sin(state.camYaw), 0.0, -cos(state.camYaw))
-    let rightVec = vec3(forwardVec.z, 0.0, -forwardVec.x)
+    let moveSpeed = 0.2 # Speed of the car
+    let rotSpeed = 0.5 # How fast car turns
 
     let step: float32 = 0.05 # Use a smaller step for finer control
+
+    let forwardVec = norm(vec3(sin(state.player.yaw), 0.0, -cos(state.player.yaw)))
 
     case e.keyCode
     of keyCodeEscape:
       sapp.requestQuit()
-    of keyCodeW:
-      state.camPos += (forwardVec * moveSpeed)
-    of keyCodeS:
-      state.camPos -= forwardVec * moveSpeed
-    of keyCodeA:
-      state.camPos -= rightVec * moveSpeed
-    of keyCodeD:
-      state.camPos += rightVec * moveSpeed
-    of keyCodeQ:
-      state.camPos.y += moveSpeed
-    of keyCodeE:
-      state.camPos.y -= moveSpeed
+    of keyCodeW: # Accelerate
+      state.player.position -= forwardVec * moveSpeed
+    of keyCodeS: # Brake/Rverese
+      state.player.position += forwardVec * moveSpeed
+    of keyCodeA: # Steer Left
+      state.player.yaw += rotSpeed
+    of keyCodeD: # Steer Right
+      state.player.yaw -= rotSpeed
     # -- AO realtime controlling --
     of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step); echo "Shadow Str: ", state.aoShadowStrength
     of keyCode2: state.aoShadowStrength += step; echo "Shadow Str: ", state.aoShadowStrength

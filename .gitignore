@@ -1,4 +1,3 @@
-docs/
 build/
 src/shaders/*.nim
 qoi_tests/

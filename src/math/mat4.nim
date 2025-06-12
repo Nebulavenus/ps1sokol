@@ -1,6 +1,10 @@
 import math
 import vec3 as vec3
 
+# Coordinate System
+# Forward Axis: -Z Forward
+# Up Axis: +Y Up
+
 type Mat4* = object
   m*: array[4, array[4, float32]]
 
@@ -13,6 +17,9 @@ proc identity*(): Mat4 =
       [0f, 0f, 0f, 1f],
     ]
   )
+
+proc mat4*(): Mat4 =
+  result = identity()
 
 proc zero*(): Mat4 =
   result = Mat4(
@@ -33,6 +40,12 @@ proc `*`*(m0: Mat4, m1: Mat4): Mat4 =
         m0.m[1][row] * m1.m[col][1] +
         m0.m[2][row] * m1.m[col][2] +
         m0.m[3][row] * m1.m[col][3]
+
+proc `*`*(m: Mat4, v: vec3.Vec3): vec3.Vec3 =
+  let w = m.m[0][3] * v.x + m.m[1][3] * v.y + m.m[2][3] * v.z + m.m[3][3]
+  result.x = (m.m[0][0] * v.x + m.m[1][0] * v.y + m.m[2][0] * v.z + m.m[3][0]) / w
+  result.y = (m.m[0][1] * v.x + m.m[1][1] * v.y + m.m[2][1] * v.z + m.m[3][1]) / w
+  result.z = (m.m[0][2] * v.x + m.m[1][2] * v.y + m.m[2][2] * v.z + m.m[3][2]) / w
 
 proc persp*(fov: float32, aspect: float32, near: float32, far: float32): Mat4 =
   result = identity()
