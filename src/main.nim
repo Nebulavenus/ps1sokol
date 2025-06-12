@@ -13,6 +13,7 @@ import tables
 import os
 import streams
 import std/random
+import audio
 
 type Vertex = object
   x, y, z: float32
@@ -882,6 +883,7 @@ type State = object
   groundLightColor: Vec3
   groundLightIntensity: float32
 
+
 var state: State
 
 const
@@ -899,6 +901,8 @@ proc init() {.cdecl.} =
     environment: sglue.environment(),
     logger: sg.Logger(fn: slog.fn),
   ))
+  audioInit()
+
   case sg.queryBackend():
     of backendGlcore: echo "using GLCORE33 backend"
     of backendD3d11: echo "using D3D11 backend"
@@ -1063,6 +1067,9 @@ proc frame() {.cdecl.} =
       const driftGripMultiplier = 0.2 # How much grip is reduced when drifting (e.g., 0.2 means 80% less grip)
       const driftTurningMultiplier = 1.5 # How much more torque you get when drifting
 
+      # Store previous velocity to calculate acceleration later
+      let prevVelocity = state.player.velocity
+
       # --- APPLY FORCES FROM INPUT ---
       let forwardDir = state.player.rotation * vec3(0, 0, -1)
 
@@ -1105,6 +1112,10 @@ proc frame() {.cdecl.} =
       # It gradually turns the car's momentum vector to match the way the car is pointing.
       let currentSpeed = len(state.player.velocity)
 
+      # --- Calculate Speed and Acceleration for Audio ---
+      let carAccel = (currentSpeed - len(prevVelocity)) / dt
+      updateEngineSound(currentSpeed, carAccel)
+
       # Handle zero velocity for norm() safely for lerp's first argument
       # If speed is very low, assume velocity direction is forward to avoid NaN from norm(zero_vec)
       let velocityDirection = if currentSpeed > 0.01: norm(state.player.velocity) else: forwardDir
@@ -1121,6 +1132,9 @@ proc frame() {.cdecl.} =
 
   # 2. Update the camera's position to follow the player
   updateCamera(dt)
+
+  # --- Call Audio Sample Generation ---
+  audioGenerateSamples()
 
   # --- Rendering ---
   # 3. Common matrices and fragment shader uniforms
@@ -1177,6 +1191,7 @@ proc frame() {.cdecl.} =
   sg.commit()
 
 proc cleanup() {.cdecl.} =
+  audioShutdown()
   sg.shutdown()
 
 proc event(e: ptr sapp.Event) {.cdecl.} =
