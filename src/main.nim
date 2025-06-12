@@ -859,6 +859,7 @@ type InputState = object
   brake: bool
   turnLeft: bool
   turnRight: bool
+  drift: bool
 
 type State = object
   pip: Pipeline
@@ -1044,50 +1045,70 @@ proc frame() {.cdecl.} =
   # 1. Update player rotation matrix based on yaw from input
   block VehiclePhysics:
     # --- Constants to Tweak ---
-    const engineForce = 15.0    # How much power the engine has
-    const turningTorque = 60.0   # How quickly the car can start to turn
-    const brakeForce = 5.0    # How powerful the brakes are
-    const drag = 0.9            # Air resistance, slows down at high speed
-    const angularDrag = 1.3     # Stops the car from spinning forever
-    const grip = 2.0            # How much the tires "grip" to turn the car's velocity
+      const engineForce = 15.0    # How much power the engine has
+      const turningTorque = 60.0   # How quickly the car can start to turn
+      const brakeForce = 5.0    # How powerful the brakes are
+      const drag = 0.9            # Air resistance, slows down at high speed
+      const angularDrag = 1.3     # Stops the car from spinning forever
+      const baseGrip = 2.0        # Renamed for clarity: Base grip strength
+      const driftGripMultiplier = 0.2 # How much grip is reduced when drifting (e.g., 0.2 means 80% less grip)
+      const driftTurningMultiplier = 1.5 # How much more torque you get when drifting
 
-    # --- APPLY FORCES FROM INPUT ---
-    let forwardDir = state.player.rotation * vec3(0, 0, -1)
+      # --- APPLY FORCES FROM INPUT ---
+      let forwardDir = state.player.rotation * vec3(0, 0, -1)
 
-    if state.input.accelerate:
-      state.player.velocity += forwardDir * engineForce * dt
+      # Determine current grip and turning torque based on drift state
+      var currentGrip = baseGrip
+      var currentTurningTorque = turningTorque
 
-    if state.input.brake:
-      # Brakes are more effective if they oppose the current velocity
-      if len(state.player.velocity) > 0.1:
-        state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
+      if state.input.drift:
+        currentGrip *= driftGripMultiplier
+        currentTurningTorque *= driftTurningMultiplier
 
-    let turnFactor = pow(len(state.player.velocity) / 10, 2)
-    if state.input.turnLeft:
-      state.player.angularVelocity += turningTorque * dt * turnFactor
+      if state.input.accelerate:
+        state.player.velocity += forwardDir * engineForce * dt
 
-    if state.input.turnRight:
-      state.player.angularVelocity -= turningTorque * dt * turnFactor
-    # --- END INPUT FORCES ---
+      if state.input.brake:
+        # Brakes are more effective if they oppose the current velocity
+        if len(state.player.velocity) > 0.1:
+          state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
 
-    # 1. Apply Drag/Friction
-    state.player.velocity = state.player.velocity * (1.0 - (drag * dt))
-    state.player.angularVelocity = state.player.angularVelocity * (1.0 - (angularDrag * dt))
+      # Use the currentTurningTorque here
+      let turnFactor = pow(len(state.player.velocity) / 10, 2)
+      if state.input.turnLeft:
+        state.player.angularVelocity += currentTurningTorque * dt * turnFactor
 
-    # 2. Update Rotation and Position from Velocities
-    state.player.yaw += state.player.angularVelocity * dt
-    state.player.position += state.player.velocity * dt
-    state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+      if state.input.turnRight:
+        state.player.angularVelocity -= currentTurningTorque * dt * turnFactor
+      # --- END INPUT FORCES ---
 
-    # 3. Align Velocity with Forward Direction (The "Grip" part)
-    # This is the magic that makes the car feel like it's driving, not just floating.
-    # It gradually turns the car's momentum vector to match the way the car is pointing.
-    let currentSpeed = len(state.player.velocity)
-    # Lerp the current velocity direction towards the car's forward direction
-    let newVelocityDir = norm(lerpV(norm(state.player.velocity), forwardDir, clamp(grip * dt, 0.0, 1.0)))
-    # Re-apply the speed to the new direction
-    if currentSpeed > 0.01: # Avoid issues with normalizing a zero vector
-        state.player.velocity = newVelocityDir * currentSpeed
+      # 1. Apply Drag/Friction
+      state.player.velocity = state.player.velocity * (1.0 - (drag * dt))
+      state.player.angularVelocity = state.player.angularVelocity * (1.0 - (angularDrag * dt))
+
+      # 2. Update Rotation and Position from Velocities
+      state.player.yaw += state.player.angularVelocity * dt
+      state.player.position += state.player.velocity * dt
+      state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+
+      # 3. Align Velocity with Forward Direction (The "Grip" part)
+      # This is the magic that makes the car feel like it's driving, not just floating.
+      # It gradually turns the car's momentum vector to match the way the car is pointing.
+      let currentSpeed = len(state.player.velocity)
+
+      # Handle zero velocity for norm() safely for lerp's first argument
+      # If speed is very low, assume velocity direction is forward to avoid NaN from norm(zero_vec)
+      let velocityDirection = if currentSpeed > 0.01: norm(state.player.velocity) else: forwardDir
+
+      # Use the calculated currentGrip for the lerp factor
+      let newVelocityDir = norm(lerpV(velocityDirection, forwardDir, clamp(currentGrip * dt, 0.0, 1.0)))
+
+      if currentSpeed > 0.01: # Avoid issues with normalizing a zero vector when assigning
+          state.player.velocity = newVelocityDir * currentSpeed
+      else:
+          # If speed is zero, ensure velocity stays zero or aligns without movement.
+          # This prevents tiny residual velocities from causing issues when stopped.
+          state.player.velocity = vec3(0,0,0)
 
   # 2. Update the camera's position to follow the player
   updateCamera(dt)
@@ -1165,6 +1186,8 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
       state.input.turnLeft = isDown
     of keyCodeD: # Steer Right
       state.input.turnRight = isDown
+    of keyCodeSpace: # Drift
+      state.input.drift = isDown
     # -- AO realtime controlling --
     of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step); echo "Shadow Str: ", state.aoShadowStrength
     of keyCode2: state.aoShadowStrength += step; echo "Shadow Str: ", state.aoShadowStrength
