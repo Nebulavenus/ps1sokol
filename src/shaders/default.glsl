@@ -75,7 +75,9 @@ layout(binding = 1) uniform fs_params {
     float u_fogFar;
     vec2 u_ditherSize;
     // --- AO Uniforms ---
-    int u_aoMode; // 0=Multiply, 1=Detail, 2=Blend
+    float u_aoShadowStrength; // Darkening effect (normal AO) - Multiply
+    float u_aoDirtStrength; // Detail color effect - Detail (blood, wet, snow)
+    float u_aoTintStrength; // Environment blend effect - Blend (sky ambient blue, cave fungi ambient)
     float u_aoIntensity;
     vec3 u_aoDetailColor;
     vec3 u_aoBaseColor;
@@ -121,38 +123,44 @@ vec3 quantize_and_dither(vec3 color, vec2 screen_pos, vec2 dither_size) {
 
 void main() {
     // --- 1. Affine Texture Sampling, "Wobble" Trick ---
-    // 1. Divide the interpolated .xy by the interpolated .z (the original 'w').
+    // Divide the interpolated .xy by the interpolated .z (the original 'w').
     // This undoes the perspective correction for the UVs only, resulting in the
     // classic screen-space linear (affine) interpolation.
     vec2 final_uv = v_affine_uv.xy / v_affine_uv.z;
+
+    // --- 2. Base Color Sampling ---
     // Sample the texture with our wobbly UVs and multiply by the vertex color.
     // The NEAREST filter on the sampler provides the sharp, pixelated look.
     vec4 tex_color = texture(sampler2D(u_texture, u_sampler), final_uv);
+    vec3 base_color = tex_color.rgb * v_color.rgb; // Also applies vertex paint
+    vec3 final_color = base_color;
 
-    // --- 2. Color Quantization and Dithering + Ambient Occlusion ---
-    // Combine texture and vertex lighting color
-    vec3 final_color = tex_color.rgb * v_color.rgb;
+    // --- 3. Layered Ambient Occlusion ---
 
-    // Ambient Occlusion
-    float scaled_ao = clamp(v_ao * u_aoIntensity, 0.0, 1.0);
-    if (u_aoMode == 0) { // Multiply Mode
-        final_color *= (1.0 - scaled_ao);
-    }
-    else if (u_aoMode == 1) { // Detail Mode
-        final_color += scaled_ao * u_aoDetailColor;
-    }
-    else if (u_aoMode == 2) { // Blend Mode
-        // lerp(base, vertex, ao)
-        final_color = mix(u_aoBaseColor, final_color, scaled_ao);
-    }
+    // Layer 1: Shadows (Multiply)
+    // Apply the core darkening effect first
+    float shadow_ao = clamp(v_ao * u_aoShadowStrength, 0.0, 1.0);
+    final_color *= (1.0 - shadow_ao);
 
-    // Apply the effect
+    // Layer 2: Environment Tint (Blend)
+    // Lerp between the now-shadowed color and the environment base color
+    // Unoccluded areas (where v_ao is low) are tinted the most
+    float tint_factor = clamp((1.0 - v_ao) * u_aoTintStrength, 0.0, 1.0);
+    final_color = mix(final_color, u_aoBaseColor, tint_factor);
+
+    // Layer 3: Dirt (Detail)
+    // Add the detail color on top of everything else
+    float dirt_ao = clamp(v_ao * u_aoDirtStrength, 0.0, 1.0);
+    final_color += dirt_ao * u_aoDetailColor;
+
+    // --- 4. Color Quantization and Dithering ---
     final_color = quantize_and_dither(final_color, gl_FragCoord.xy, u_ditherSize.xy);
 
-    // --- 3. Fog Application ---
+    // --- 5. Fog Application ---
     float fog_factor = smoothstep(u_fogNear, u_fogFar, v_dist);
     final_color = mix(final_color, u_fogColor.rgb, fog_factor);
 
+    // Final output
     frag_color = vec4(final_color, 1.0);
 
     // Debug

@@ -715,9 +715,10 @@ type State = object
   vsParams: VsParams
   fsParams: FsParams
   rx, ry: float32
-  # -- Controlling AO --
-  aoMode: int
-  aoIntensity: float32
+  # -- Controlling AO Multi-Layered --
+  aoShadowStrength: float32
+  aoDirtStrength: float32
+  aoTintStrength: float32
   aoDetailColor: Vec3
   aoBaseColor: Vec3
 
@@ -770,10 +771,8 @@ proc init() {.cdecl.} =
   # load qoi texture
   var qoiImage: QOIF
   try:
-    #qoiImage = readQOI("assets/diffuse.qoi")
-    #qoiImage = readQOI("diffuse.qoi")
-    qoiImage = readQOI("assets/malenia.qoi")
-    #qoiImage = readQOI("malenia.qoi")
+    qoiImage = readQOI("assets/diffuse.qoi")
+    #qoiImage = readQOI("assets/malenia.qoi")
     echo "Success loaded qoi: diffuse.qoi ", qoiImage.header.width, "-", qoiImage.header.height
     echo "First byte is not null! ", qoiImage.data[160]
     echo "Data is not null! ", qoiImage.data.len
@@ -845,7 +844,7 @@ proc init() {.cdecl.} =
   var mesh: Mesh
 
   let assetDir = getAppDir() & DirSep
-  let modelPath = assetDir & "teapot.ply"
+  let modelPath = assetDir & "bs_rest.obj"
 
   # Define AO parameters
   let aoParams = AOBakeParams(
@@ -855,9 +854,11 @@ proc init() {.cdecl.} =
     bias: 0.001,
   )
   # Also store real-time AO variables
-  #state.aoMode = AOBakeMode.Multiply
-  state.aoMode = 0
-  state.aoIntensity = 1.5
+  # Start with shadows enabled and other effects off
+  state.aoShadowStrength = 1.0
+  state.aoDirtStrength = 0.0
+  state.aoTintStrength = 0.0
+
   state.aoDetailColor = vec3(0.2, 0.1, 0.05) # "dirt"
   state.aoBaseColor = vec3(0.1, 0.1, 0.2) # Cool ambient
 
@@ -908,8 +909,9 @@ proc computeFsParams(): shd.FsParams =
     u_fogFar: 20.0f,
     u_ditherSize: vec2(320.0, 240.0), # Should be equal to window size
     # -- AO uniforms --
-    u_aoMode: state.aoMode.int32,
-    u_aoIntensity: state.aoIntensity,
+    u_aoShadowStrength: state.aoShadowStrength,
+    u_aoDirtStrength: state.aoDirtStrength,
+    u_aoTintStrength: state.aoTintStrength,
     u_aoDetailColor: state.aoDetailColor,
     u_aoBaseColor: state.aoBaseColor
   )
@@ -969,17 +971,27 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
     of keyCodeE:
       state.camPos.y -= moveSpeed
     # -- AO realtime controlling --
-    of keyCodeM:
-      # Cycle through AO modes
-      let nextMode = (state.aoMode.int + 1) mod 3
-      state.aoMode = nextMode
-      echo "Set AO Mode to: ", state.aoMode
-    of keyCodeUp:
-      state.aoIntensity += 0.1
-      echo "AO Intensity: ", state.aoIntensity
-    of keyCodeDown:
-      state.aoIntensity = max(0.0, state.aoIntensity - 0.1)
-      echo "AO Intensity: ", state.aoIntensity
+    # --- Shadow Strength Control ---
+    of keyCode1:
+      state.aoShadowStrength = max(0.0, state.aoShadowStrength - 0.1)
+      echo "Shadow Strength: ", state.aoShadowStrength
+    of keyCode2:
+      state.aoShadowStrength += 0.1
+      echo "Shadow Strength: ", state.aoShadowStrength
+    # --- Dirt Strength Control ---
+    of keyCode3:
+      state.aoDirtStrength = max(0.0, state.aoDirtStrength - 0.1)
+      echo "Dirt Strength: ", state.aoDirtStrength
+    of keyCode4:
+      state.aoDirtStrength += 0.1
+      echo "Dirt Strength: ", state.aoDirtStrength
+    # --- Tint Strength Control ---
+    of keyCode5:
+      state.aoTintStrength = max(0.0, state.aoTintStrength - 0.1)
+      echo "Tint Strength: ", state.aoTintStrength
+    of keyCode6:
+      state.aoTintStrength += 0.1
+      echo "Tint Strength: ", state.aoTintStrength
     else: discard
 
 # main
