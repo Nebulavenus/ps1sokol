@@ -5,3 +5,4 @@ qoi_tests/
 tests/*.exe
 assets/
 *.pdb
+nimalyzer.log
