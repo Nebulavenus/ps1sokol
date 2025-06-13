@@ -14,6 +14,13 @@ import os
 import streams
 import std/random
 import audio
+import embedfs
+
+# Declare your embedded file system. This will embed the 'assets' directory
+# relative to where main.nim is compiled.
+# For development, you can set `embed = false` to read directly from disk
+# without recompiling (but ensure the 'assets' folder exists on disk).
+const ASSETS_FS = embedDir("assets", embed = false)
 
 type Vertex = object
   x, y, z: float32
@@ -58,113 +65,6 @@ proc vec2ToUshort2n(v: Vec2): (uint16, uint16) =
   let uvY = cast[uint16](clampedY * 65535.0)
 
   return (uvX, uvY)
-
-proc loadObj(path: string): (seq[Vertex], seq[uint16]) =
-  var
-    temp_positions: seq[Vec3]
-    temp_normals: seq[Vec3]
-    temp_uvs: seq[Vec2]
-    out_vertices: seq[Vertex]
-    out_indices: seq[uint16]
-    vertex_cache: Table[string, uint16]
-
-  if not os.fileExists(path):
-    echo("Cannot load OBJ file, path not found: " & path)
-    return
-
-  echo "Starting OBJ Loading"
-  for line in lines(path):
-    if line.startsWith("v "):
-      let parts = line.split()
-      temp_positions.add(vec3(
-        parts[1].parseFloat,
-        parts[2].parseFloat,
-        parts[3].parseFloat,
-      ))
-    elif line.startsWith("vn "):
-      let parts = line.split()
-      temp_normals.add(vec3(
-        parts[1].parseFloat,
-        parts[2].parseFloat,
-        parts[3].parseFloat,
-      ))
-    elif line.startsWith("vt "):
-      let parts = line.split()
-      temp_uvs.add(vec2(
-        parts[1].parseFloat,
-        parts[2].parseFloat,
-      ))
-    elif line.startsWith("f "):
-      let face_parts = line.split()
-      for i in 1..3: # For each vertex in the triangle face
-        let key = face_parts[i]
-
-        if not vertex_cache.haskey(key):
-          var
-            pos_idx = -1
-            uv_idx = -1
-            nrm_idx = -1
-
-          let v_parts = key.split('/')
-
-          # Parse based on the number of components found
-          case v_parts.len
-          of 1: # Format "v"
-            pos_idx = v_parts[0].parseInt - 1
-          of 2: # Format "v/vt"
-            pos_idx = v_parts[0].parseInt - 1
-            uv_idx = v_parts[1].parseInt - 1
-          of 3: # Format "v/vt/vn" or "v//vn"
-            pos_idx = v_parts[0].parseInt - 1
-            if v_parts[1].len > 0: # Check if vt is present
-              uv_idx = v_parts[1].parseInt - 1
-            nrm_idx = v_parts[2].parseInt - 1
-          else:
-            echo("Unsupported face format component: " & key)
-            continue
-
-          # Create the vertex, providing defaults for missing data
-          let pos = if pos_idx != -1: temp_positions[pos_idx] else: vec3(0,0,0)
-          let nrm = if nrm_idx != -1: temp_normals[nrm_idx] else: vec3(0,1,0) # Default normal points up
-          var uv  = if uv_idx != -1: temp_uvs[uv_idx] else: vec2(0,0) # Default UV is 0,0
-          # Invert uv, modern rendering convention
-          uv.y = 1.0 - uv.y
-          let uvS = vec2ToUshort2N(uv)
-          # Obj doesn't store vertex colors... by default white
-          let new_vert = Vertex(
-            x: pos.x, y: pos.y, z: pos.z,
-            xN: nrm.x, yN: nrm.y, zN: nrm.z,
-            color: 0xFFFFFFFF'u32,
-            #u: uvS[0], v: uvS[1]
-            u: uv.x, v: uv.y
-          )
-          out_vertices.add(new_vert)
-          let new_idx = (out_vertices.len - 1).uint16
-          vertex_cache[key] = new_idx
-          out_indices.add(new_idx)
-        else:
-          # Vertex already exists, just add its index
-          out_indices.add(vertex_cache[key])
-
-  echo "Loaded OBJ $1: $2 vertices, $3 indices" % [$path, $out_vertices.len, $out_indices.len]
-  return (out_vertices, out_indices)
-
-proc packColor(r, g, b, a: uint8): uint32 {.inline.} =
-  ## Packs four 8-bit color channels into a single 32-bit integer.
-  ## The byte order (AABBGGRR) is what Sokol's UBYTE4N format expects on little-endian systems
-  ## to correctly map to an RGBA vec4 in the shader.
-  result = (uint32(a) shl 24) or (uint32(b) shl 16) or (uint32(g) shl 8) or uint32(r)
-
-# Add these new helper procedures
-proc unpackColor(c: uint32): (uint8, uint8, uint8, uint8) {.inline.} =
-  ## Unpacks a 32-bit AABBGGRR color into four 8-bit channels
-  # We extract specific bits with mask `and` and then shift it
-  # to their correct position of a simple byte u8
-  let r = (c and 0x000000FF'u32).uint8
-  let g = ((c and 0x0000FF00'u32) shr 8).uint8
-  let b = ((c and 0x00FF0000'u32) shr 16).uint8
-  let a = ((c and 0xFF000000'u32) shr 24).uint8
-  return (r, g, b, a)
 
 # Standard method to generate a random point within a unit sphere.
 proc randomHemisphereDirection(normal: Vec3): Vec3 =
@@ -551,8 +451,117 @@ proc bakeAmbientOcclusion(vertices: var seq[Vertex], indices: seq[uint16], param
 
   echo "Ambient Occlusion bake complete."
 
+proc packColor(r, g, b, a: uint8): uint32 {.inline.} =
+  ## Packs four 8-bit color channels into a single 32-bit integer.
+  ## The byte order (AABBGGRR) is what Sokol's UBYTE4N format expects on little-endian systems
+  ## to correctly map to an RGBA vec4 in the shader.
+  result = (uint32(a) shl 24) or (uint32(b) shl 16) or (uint32(g) shl 8) or uint32(r)
 
-proc loadPly(path: string): (seq[Vertex], seq[uint16]) =
+# Add these new helper procedures
+proc unpackColor(c: uint32): (uint8, uint8, uint8, uint8) {.inline.} =
+  ## Unpacks a 32-bit AABBGGRR color into four 8-bit channels
+  # We extract specific bits with mask `and` and then shift it
+  # to their correct position of a simple byte u8
+  let r = (c and 0x000000FF'u32).uint8
+  let g = ((c and 0x0000FF00'u32) shr 8).uint8
+  let b = ((c and 0x00FF0000'u32) shr 16).uint8
+  let a = ((c and 0xFF000000'u32) shr 24).uint8
+  return (r, g, b, a)
+
+proc loadObj(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): (seq[Vertex], seq[uint16]) =
+  var
+    temp_positions: seq[Vec3]
+    temp_normals: seq[Vec3]
+    temp_uvs: seq[Vec2]
+    out_vertices: seq[Vertex]
+    out_indices: seq[uint16]
+    vertex_cache: Table[string, uint16]
+
+  # Use fs.get() to read the file content
+  let fileContentOpt = fs.get(filename)
+  if fileContentOpt.isNone:
+    echo("Cannot load OBJ file, file not found in embedded FS: " & filename)
+    return
+
+  echo "Starting OBJ Loading from embedded FS: " & filename
+  let fileContent = fileContentOpt.get() # Get the string content
+  for line in fileContent.splitLines(): # Iterate over lines of the string content
+    if line.startsWith("v "):
+      let parts = line.split()
+      temp_positions.add(vec3(
+        parts[1].parseFloat,
+        parts[2].parseFloat,
+        parts[3].parseFloat,
+      ))
+    elif line.startsWith("vn "):
+      let parts = line.split()
+      temp_normals.add(vec3(
+        parts[1].parseFloat,
+        parts[2].parseFloat,
+        parts[3].parseFloat,
+      ))
+    elif line.startsWith("vt "):
+      let parts = line.split()
+      temp_uvs.add(vec2(
+        parts[1].parseFloat,
+        parts[2].parseFloat,
+      ))
+    elif line.startsWith("f "):
+      let face_parts = line.split()
+      for i in 1..3: # For each vertex in the triangle face
+        let key = face_parts[i]
+
+        if not vertex_cache.haskey(key):
+          var
+            pos_idx = -1
+            uv_idx = -1
+            nrm_idx = -1
+
+          let v_parts = key.split('/')
+
+          # Parse based on the number of components found
+          case v_parts.len
+          of 1: # Format "v"
+            pos_idx = v_parts[0].parseInt - 1
+          of 2: # Format "v/vt"
+            pos_idx = v_parts[0].parseInt - 1
+            uv_idx = v_parts[1].parseInt - 1
+          of 3: # Format "v/vt/vn" or "v//vn"
+            pos_idx = v_parts[0].parseInt - 1
+            if v_parts[1].len > 0: # Check if vt is present
+              uv_idx = v_parts[1].parseInt - 1
+            nrm_idx = v_parts[2].parseInt - 1
+          else:
+            echo("Unsupported face format component: " & key)
+            continue
+
+          # Create the vertex, providing defaults for missing data
+          let pos = if pos_idx != -1: temp_positions[pos_idx] else: vec3(0,0,0)
+          let nrm = if nrm_idx != -1: temp_normals[nrm_idx] else: vec3(0,1,0) # Default normal points up
+          var uv  = if uv_idx != -1: temp_uvs[uv_idx] else: vec2(0,0) # Default UV is 0,0
+          # Invert uv, modern rendering convention
+          uv.y = 1.0 - uv.y
+          #let uvS = vec2ToUshort2N(uv)
+          # Obj doesn't store vertex colors... by default white
+          let new_vert = Vertex(
+            x: pos.x, y: pos.y, z: pos.z,
+            xN: nrm.x, yN: nrm.y, zN: nrm.z,
+            color: 0xFFFFFFFF'u32,
+            #u: uvS[0], v: uvS[1]
+            u: uv.x, v: uv.y
+          )
+          out_vertices.add(new_vert)
+          let new_idx = (out_vertices.len - 1).uint16
+          vertex_cache[key] = new_idx
+          out_indices.add(new_idx)
+        else:
+          # Vertex already exists, just add its index
+          out_indices.add(vertex_cache[key])
+
+  echo "Loaded OBJ $1: $2 vertices, $3 indices" % [$filename, $out_vertices.len, $out_indices.len]
+  return (out_vertices, out_indices)
+
+proc loadPly(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): (seq[Vertex], seq[uint16]) =
   ## Loads a 3D model from an ASCII PLY file.
   ##
   ## Features:
@@ -566,8 +575,10 @@ proc loadPly(path: string): (seq[Vertex], seq[uint16]) =
     out_vertices: seq[Vertex]
     out_indices: seq[uint16]
 
-  if not os.fileExists(path):
-    echo "loadPly: Cannot load PLY file, path not found: " & path
+  # Use fs.get() to read the file content
+  let fileContentOpt = fs.get(filename)
+  if fileContentOpt.isNone:
+    echo "loadPly: Cannot load PLY file, file not found in embedded FS: " & filename
     return
 
   # --- 1. Header Parsing ---
@@ -581,7 +592,8 @@ proc loadPly(path: string): (seq[Vertex], seq[uint16]) =
     vertexPropertyCount = 0
     parsingVertex = false
 
-  let fileLines = readFile(path).splitLines()
+  echo "loadPly: Starting PLY Loading from embedded FS: " & filename
+  let fileLines = fileContentOpt.get().splitLines() # Get content and split into lines
   var bodyStartIndex = -1
 
   for i, line in fileLines:
@@ -754,7 +766,7 @@ proc loadMeshFromCache(path: string): (seq[Vertex], seq[uint16]) =
 
   return (vertices, indices)
 
-proc loadAndProcessMesh(modelPath: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): Mesh =
+proc loadAndProcessMesh(fs: EmbeddedFS|RuntimeEmbeddedFS, modelFilename: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): Mesh =
   ## High-level procedure to load a mesh.
   ## It will use a cached version if available, otherwise it will load,
   ## bake AO, and save a new version to the cache.
@@ -762,19 +774,21 @@ proc loadAndProcessMesh(modelPath: string, aoParams: AOBakeParams, texture: Imag
     cpuVertices: seq[Vertex]
     cpuIndices: seq[uint16]
 
-  let cachePath = modelPath & ".baked_ao.bin"
+  # The cache path still refers to a file on disk
+  #let cachePath = modelPath & ".baked_ao.bin"
+  let cachePath = getAppDir() / (modelFilename & ".baked_ao.bin")
 
   if os.fileExists(cachePath):
     # Load directly from the fast binary cache
     (cpuVertices, cpuIndices) = loadMeshFromCache(cachePath)
   else:
     # Cache not found, do the full loading and baking process
-    let fileExt = modelPath.splitFile.ext
+    let fileExt = modelFilename.splitFile.ext
     case fileExt.toLower()
     of ".ply":
-      (cpuVertices, cpuIndices) = loadPly(modelPath)
+      (cpuVertices, cpuIndices) = loadPly(fs, modelFilename)
     of ".obj":
-      (cpuVertices, cpuIndices) = loadObj(modelPath)
+      (cpuVertices, cpuIndices) = loadObj(fs, modelFilename)
     else:
       echo "Unsupported model format: ", fileExt
       return
@@ -804,16 +818,30 @@ proc loadAndProcessMesh(modelPath: string, aoParams: AOBakeParams, texture: Imag
   else:
     echo "Error: No vertex data to upload to GPU."
 
-proc loadTexture(textureNamePath: string): sg.Image =
+proc loadTexture(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): sg.Image =
+  # Use fs.get() to read the file content
+  let qoiContentOpt = fs.get(filename)
+  if qoiContentOpt.isNone:
+    echo "Error: QOI texture not found in embedded FS: " & filename
+    requestQuit() # Critical asset
+    return sg.Image() # Dummy?
+
   # load qoi texture
   var qoiImage: QOIF
   try:
-    qoiImage = readQOI(textureNamePath)
-    #qoiImage = readQOI("assets/malenia.qoi")
-    echo "Success loaded qoi: " & textureNamePath, qoiImage.header.width, "-", qoiImage.header.height
+    # Get the string content from the Option
+    let qoiContentStr = qoiContentOpt.get()
+
+    # Cast the string content to seq[byte] and decode it directly.
+    # Nim's `string` is often implemented as a sequence of bytes,
+    # so a `cast` here is usually safe and efficient for raw byte data.
+    qoiImage = decodeQOI(cast[seq[byte]](qoiContentStr))
+
+    echo "Success loaded qoi from embedded FS: " & filename, qoiImage.header.width, "-", qoiImage.header.height
   except Exception as e:
-    echo "Error loading qoi"
+    echo "Error decoding qoi from embedded FS: " & filename & " - " & e.msg
     requestQuit()
+    return sg.Image() # Dummy?
 
   var finalPixelData: seq[byte]
   var finalPixelFormat: sg.PixelFormat
@@ -974,15 +1002,13 @@ proc init() {.cdecl.} =
   ));
 
   # Load the mesh. One function handles everything
-  #let trackTexture = loadTexture("assets/diffuse.qoi")
-  let oceanTexture = loadTexture("assets/ocean.qoi")
-  var ocean = loadAndProcessMesh(oceanPath, aoParams, oceanTexture, pointSmp)
+  let oceanTexture = loadTexture(ASSETS_FS, "ocean.qoi")
+  let trackTexture = loadTexture(ASSETS_FS, "track.qoi")
+  let carTexture = loadTexture(ASSETS_FS, "car.qoi")
 
-  let trackTexture = loadTexture("assets/track1.qoi")
-  var mesh = loadAndProcessMesh(trackPath, aoParams, trackTexture, pointSmp)
-
-  let carTexture = loadTexture("assets/car2.qoi")
-  var carMesh = loadAndProcessMesh(carPath, aoParams, carTexture, pointSmp)
+  var ocean = loadAndProcessMesh(ASSETS_FS, "ocean.ply", aoParams, oceanTexture, pointSmp)
+  var mesh = loadAndProcessMesh(ASSETS_FS, "track.ply", aoParams, trackTexture, pointSmp)
+  var carMesh = loadAndProcessMesh(ASSETS_FS, "car.ply", aoParams, carTexture, pointSmp)
 
   # Don't forget to save it in state
   state.mesh = mesh
