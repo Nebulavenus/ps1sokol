@@ -1020,7 +1020,7 @@ proc computeFsParams(): shd.FsParams =
   result = shd.FsParams(
     u_fogColor: vec3(0.25f, 0.5f, 0.75f),
     u_fogNear: 4.0f,
-    u_fogFar: 150.0f,
+    u_fogFar: 250.0f,
     u_ditherSize: vec2(320.0, 240.0), # Should be equal to window size
     # -- AO uniforms --
     u_aoShadowStrength: state.aoShadowStrength,
@@ -1208,7 +1208,7 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
     if state.camPitch < -pitchLimit: state.camPitch = -pitchLimit
   ]#
   if e.`type` == EventType.eventTypeMouseScroll:
-    state.cameraOffsetY += e.scrollY
+    state.cameraOffsetY += e.scrollY * 0.5
     state.cameraOffsetY = max(state.cameraOffsetY, 0.0)
 
   # Keyboard
