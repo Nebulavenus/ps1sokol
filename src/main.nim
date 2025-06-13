@@ -750,7 +750,7 @@ proc loadMeshFromCache(fs: RuntimeFS, path: string): (seq[Vertex], seq[uint16]) 
 
   return (vertices, indices)
 
-proc loadAndProcessMesh(fs: RuntimeFS, modelFilename: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): Mesh =
+proc loadAndProcessMesh(fs: RuntimeFS, modelFilename: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): (Mesh, seq[Vertex], seq[uint16]) =
   ## High-level procedure to load a mesh.
   ## It will use a cached version if available, otherwise it will load,
   ## bake AO, and save a new version to the cache.
@@ -803,10 +803,14 @@ proc loadAndProcessMesh(fs: RuntimeFS, modelFilename: string, aoParams: AOBakePa
       usage: BufferUsage(indexBuffer: true),
       data: sg.Range(addr: cpuIndices[0].addr, size: cpuIndices.len * sizeof(uint16))
     ))
-    result.indexCount = cpuIndices.len.int32
-    result.bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
-    result.bindings.images[shd.imgUTexture] = texture
-    result.bindings.samplers[shd.smpUSampler] = sampler
+    # Main mesh
+    result[0].indexCount = cpuIndices.len.int32
+    result[0].bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
+    result[0].bindings.images[shd.imgUTexture] = texture
+    result[0].bindings.samplers[shd.smpUSampler] = sampler
+    # Optional geometry
+    result[1] = cpuVertices
+    result[2] = cpuIndices
   else:
     echo "Error: No vertex data to upload to GPU."
 
@@ -890,6 +894,9 @@ type State = object
   trackMesh2: Mesh # Shape
   trackMesh3: Mesh # Grass
   trackMesh4: Mesh # Trees
+  # CPU-side collision geometry for the road
+  roadCollisionVertices: seq[Vertex]
+  roadCollisionIndices: seq[uint16]
   # Player's car mesh
   carMesh1: Mesh # Body
   carMesh2: Mesh # Rear wheel
@@ -1017,16 +1024,21 @@ proc init() {.cdecl.} =
   var carMesh3 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_front.ply", aoParams, carTexture, pointSmp)
 
   # Don't forget to save it in state
-  state.trackMesh1 = trackMesh1
-  state.trackMesh2 = trackMesh2
-  state.trackMesh3 = trackMesh3
-  state.trackMesh4 = trackMesh4
-  state.carMesh1 = carMesh1
-  state.carMesh2 = carMesh2
-  state.carMesh3 = carMesh3
+  state.trackMesh1 = trackMesh1[0]
+  state.trackMesh2 = trackMesh2[0]
+  state.trackMesh3 = trackMesh3[0]
+  state.trackMesh4 = trackMesh4[0]
+  state.carMesh1 = carMesh1[0]
+  state.carMesh2 = carMesh2[0]
+  state.carMesh3 = carMesh3[0]
+
+  # Also save road geometry
+  let (_, roadVertices, roadIndices) = trackMesh1
+  state.roadCollisionVertices = roadVertices
+  state.roadCollisionIndices = roadIndices
 
   # --- Setup camera & player ---
-  state.player.position = vec3(0.0, 0.2, 0.0)
+  state.player.position = vec3(0.0, 20, 25.0)
   state.player.velocity = vec3(0, 0, 0)
   state.player.yaw = 0.0
   state.player.angularVelocity = 0.0
@@ -1086,6 +1098,80 @@ proc updateCamera(dt: float32) =
   state.cameraPos = vec3.lerpV(state.cameraPos, desiredPos, t)
   state.cameraTarget = vec3.lerpV(state.cameraTarget, desiredTarget, t)
 
+# You'll need this modified version of your ray intersect function that returns the distance
+proc rayTriangleIntersectDist(rayOrigin, rayDir: Vec3, v0, v1, v2: Vec3, maxDist: float): float =
+  const EPSILON = 0.000001
+  let edge1 = v1 - v0
+  let edge2 = v2 - v0
+  let h = cross(rayDir, edge2)
+  let a = dot(edge1, h)
+
+  if a > -EPSILON and a < EPSILON: return -1.0
+
+  let f = 1.0 / a
+  let s = rayOrigin - v0
+  let u = f * dot(s, h)
+
+  if u < 0.0 or u > 1.0: return -1.0
+
+  let q = cross(s, edge1)
+  let v = f * dot(rayDir, q)
+
+  if v < 0.0 or u + v > 1.0: return -1.0
+
+  let t = f * dot(edge2, q)
+  if t > EPSILON and t < maxDist:
+    return t # Return distance on hit
+  else:
+    return -1.0 # Return -1 on miss
+
+type SurfaceHit = object
+  pos: Vec3
+  normal: Vec3
+
+# This function will take the car's position, cast a ray downwards, and find the closest triangle it hits on the roadCollision mesh.
+# It will return the intersection point and the normal of the surface hit.
+proc getSurfaceInfo(carPos: Vec3): Option[SurfaceHit] =
+  ## Raycasts down from the car to find the track surface height and normal.
+  let rayOrigin = carPos + vec3(0, 1.0, 0) # Start ray slightly above the car to avoid self-intersection
+  let rayDir = vec3(0, -1.0, 0) # Ray points straight down
+  const maxRayDist = 10.0 # How far down to check for the track
+
+  var closestHitDist = maxRayDist
+  var hitFound = false
+  var hitNormal = vec3.up() # Default to up if no surface is found
+
+  # Brute-force check against all triangles in the road collision mesh
+  for i in 0 ..< (state.roadCollisionIndices.len div 3):
+    let i0 = state.roadCollisionIndices[i * 3 + 0]
+    let i1 = state.roadCollisionIndices[i * 3 + 1]
+    let i2 = state.roadCollisionIndices[i * 3 + 2]
+
+    let v0 = vec3(state.roadCollisionVertices[i0].x, state.roadCollisionVertices[i0].y, state.roadCollisionVertices[i0].z)
+    let v1 = vec3(state.roadCollisionVertices[i1].x, state.roadCollisionVertices[i1].y, state.roadCollisionVertices[i1].z)
+    let v2 = vec3(state.roadCollisionVertices[i2].x, state.roadCollisionVertices[i2].y, state.roadCollisionVertices[i2].z)
+
+    # Use a modified rayTriangleIntersect that returns distance
+    let dist = rayTriangleIntersectDist(rayOrigin, rayDir, v0, v1, v2, maxRayDist)
+
+    if dist >= 0 and dist < closestHitDist:
+      hitFound = true
+      closestHitDist = dist
+      # Calculate the normal of the hit triangle
+      let edge1 = v1 - v0
+      let edge2 = v2 - v0
+      hitNormal = norm(cross(edge1, edge2))
+      # Ensure normal points upwards relative to the world
+      if hitNormal.y < 0:
+        #hitNormal *= -1.0
+        hitNormal = hitNormal * -1.0
+
+  if hitFound:
+    let hitPos = rayOrigin + rayDir * closestHitDist
+    return some(SurfaceHit(pos: hitPos, normal: hitNormal))
+  else:
+    return none[SurfaceHit]()
+
 proc frame() {.cdecl.} =
   #let dt = sapp.frameDuration() * 60f
   let dt = sapp.frameDuration()
@@ -1094,77 +1180,110 @@ proc frame() {.cdecl.} =
   # 1. Update player rotation matrix based on yaw from input
   block VehiclePhysics:
     # --- Constants to Tweak ---
-      const engineForce = 15.0    # How much power the engine has
-      const turningTorque = 60.0   # How quickly the car can start to turn
-      const brakeForce = 5.0    # How powerful the brakes are
-      const drag = 0.9            # Air resistance, slows down at high speed
-      const angularDrag = 1.3     # Stops the car from spinning forever
-      const baseGrip = 2.0        # Renamed for clarity: Base grip strength
-      const driftGripMultiplier = 0.2 # How much grip is reduced when drifting (e.g., 0.2 means 80% less grip)
-      const driftTurningMultiplier = 1.5 # How much more torque you get when drifting
+    const engineForce = 15.0    # How much power the engine has
+    const turningTorque = 60.0   # How quickly the car can start to turn
+    const brakeForce = 5.0    # How powerful the brakes are
+    const drag = 0.9            # Air resistance, slows down at high speed
+    const angularDrag = 1.3     # Stops the car from spinning forever
+    const baseGrip = 2.0        # Renamed for clarity: Base grip strength
+    const driftGripMultiplier = 0.2 # How much grip is reduced when drifting (e.g., 0.2 means 80% less grip)
+    const driftTurningMultiplier = 1.5 # How much more torque you get when drifting
 
-      # Store previous velocity to calculate acceleration later
-      let prevVelocity = state.player.velocity
+    # Store previous velocity to calculate acceleration later
+    let prevVelocity = state.player.velocity
 
-      # --- APPLY FORCES FROM INPUT ---
-      let forwardDir = state.player.rotation * vec3(0, 0, -1)
+    # --- APPLY FORCES FROM INPUT ---
+    let forwardDir = state.player.rotation * vec3(0, 0, -1)
 
-      # Determine current grip and turning torque based on drift state
-      var currentGrip = baseGrip
-      var currentTurningTorque = turningTorque
+    # Determine current grip and turning torque based on drift state
+    var currentGrip = baseGrip
+    var currentTurningTorque = turningTorque
 
-      if state.input.drift:
-        currentGrip *= driftGripMultiplier
-        currentTurningTorque *= driftTurningMultiplier
+    if state.input.drift:
+      currentGrip *= driftGripMultiplier
+      currentTurningTorque *= driftTurningMultiplier
 
-      if state.input.accelerate:
-        state.player.velocity += forwardDir * engineForce * dt
+    if state.input.accelerate:
+      state.player.velocity += forwardDir * engineForce * dt
 
-      if state.input.brake:
-        # Brakes are more effective if they oppose the current velocity
-        if len(state.player.velocity) > 0.1:
-          state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
+    if state.input.brake:
+      # Brakes are more effective if they oppose the current velocity
+      if len(state.player.velocity) > 0.1:
+        state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
 
-      # Use the currentTurningTorque here
-      let turnFactor = pow(len(state.player.velocity) / 10, 2)
-      if state.input.turnLeft:
-        state.player.angularVelocity += currentTurningTorque * dt * turnFactor
+    # Use the currentTurningTorque here
+    let turnFactor = pow(len(state.player.velocity) / 10, 2)
+    if state.input.turnLeft:
+      state.player.angularVelocity += currentTurningTorque * dt * turnFactor
 
-      if state.input.turnRight:
-        state.player.angularVelocity -= currentTurningTorque * dt * turnFactor
-      # --- END INPUT FORCES ---
+    if state.input.turnRight:
+      state.player.angularVelocity -= currentTurningTorque * dt * turnFactor
+    # --- END INPUT FORCES ---
 
-      # 1. Apply Drag/Friction
-      state.player.velocity = state.player.velocity * (1.0 - (drag * dt))
-      state.player.angularVelocity = state.player.angularVelocity * (1.0 - (angularDrag * dt))
+    # 1. Apply Drag/Friction
+    state.player.velocity = state.player.velocity * (1.0 - (drag * dt))
+    state.player.angularVelocity = state.player.angularVelocity * (1.0 - (angularDrag * dt))
 
-      # 2. Update Rotation and Position from Velocities
-      state.player.yaw += state.player.angularVelocity * dt
-      state.player.position += state.player.velocity * dt
-      state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+    # 2. Update Rotation and Position from Velocities
+    state.player.yaw += state.player.angularVelocity * dt
+    state.player.position += state.player.velocity * dt
+    state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
 
-      # 3. Align Velocity with Forward Direction (The "Grip" part)
-      # This is the magic that makes the car feel like it's driving, not just floating.
-      # It gradually turns the car's momentum vector to match the way the car is pointing.
-      let currentSpeed = len(state.player.velocity)
+    # --- Ground Following and Alignment ---
+    var surfaceUp = vec3.up() # Default up vector
+    let surfaceInfoOpt = getSurfaceInfo(state.player.position)
 
-      # --- Calculate Speed and Acceleration for Audio ---
-      let carAccel = (currentSpeed - len(prevVelocity)) / dt
-      updateEngineSound(currentSpeed, carAccel, state.input.drift)
+    if surfaceInfoOpt.isSome:
+      let surfaceInfo = surfaceInfoOpt.get()
+      # Snap car's height to the ground
+      state.player.position.y = surfaceInfo.pos.y
+      surfaceUp = surfaceInfo.normal
+    else:
+      # Optional: Handle what happens when the car is off the track (e.g., reset, fall)
+      state.player.position.y -= 9.8 * dt # Simple gravity
 
-      # Handle zero velocity for norm() safely for lerp's first argument
-      # If speed is very low, assume velocity direction is forward to avoid NaN from norm(zero_vec)
-      let velocityDirection = if currentSpeed > 0.01: norm(state.player.velocity) else: forwardDir
+    # 3. Align Velocity with Forward Direction (The "Grip" part)
+    # This is the magic that makes the car feel like it's driving, not just floating.
+    # It gradually turns the car's momentum vector to match the way the car is pointing.
+    let currentSpeed = len(state.player.velocity)
 
-      # Use the calculated currentGrip for the lerp factor
-      let newVelocityDir = norm(lerpV(velocityDirection, forwardDir, clamp(currentGrip * dt, 0.0, 1.0)))
+    # --- Calculate Speed and Acceleration for Audio ---
+    let carAccel = (currentSpeed - len(prevVelocity)) / dt
+    updateEngineSound(currentSpeed, carAccel, state.input.drift)
 
-      if currentSpeed > 0.01: # Avoid issues with normalizing a zero vector when assigning
-          state.player.velocity = newVelocityDir * currentSpeed
-      else:
-          # If speed is zero, ensure velocity stays zero or aligns without movement.
-          # This prevents tiny residual velocities from causing issues when stopped.
-          state.player.velocity = vec3(0,0,0)
+    # Handle zero velocity for norm() safely for lerp's first argument
+    # If speed is very low, assume velocity direction is forward to avoid NaN from norm(zero_vec)
+    let velocityDirection = if currentSpeed > 0.01: norm(state.player.velocity) else: forwardDir
+
+    # Use the calculated currentGrip for the lerp factor
+    let newVelocityDir = norm(lerpV(velocityDirection, forwardDir, clamp(currentGrip * dt, 0.0, 1.0)))
+
+    if currentSpeed > 0.01: # Avoid issues with normalizing a zero vector when assigning
+        state.player.velocity = newVelocityDir * currentSpeed
+    else:
+        # If speed is zero, ensure velocity stays zero or aligns without movement.
+        # This prevents tiny residual velocities from causing issues when stopped.
+        state.player.velocity = vec3(0,0,0)
+
+    # 4. Align Car's Visual Rotation to the Surface
+    # We need to construct a new rotation matrix that respects the yaw from player input
+    # but also aligns with the surface normal.
+    # 4. Align Car's Visual Rotation to the Surface
+    # We construct the new rotation matrix using the "look at" direction (yaw) and the surface's up vector.
+    # This uses the Gram-Schmidt process to create an orthonormal basis.
+    let playerForward = vec3(sin(state.player.yaw), 0, -cos(state.player.yaw))
+
+    # Calculate the new right vector, perpendicular to both forward and up.
+    let newRight = norm(cross(playerForward, surfaceUp))
+
+    # Recalculate the new forward vector to be perpendicular to the new right and up vectors.
+    # This ensures the car points along the track's slope while maintaining its yaw direction.
+    let newForward = norm(cross(surfaceUp, newRight))
+
+    # --- CORRECTED ROTATION MATRIX CONSTRUCTION ---
+    # Manually construct the Mat4 rotation matrix from the basis vectors.
+    # Note: The 4th column is for translation, which we handle separately, so it's (0,0,0,1).
+    state.player.rotation = fromCols(newRight, surfaceUp, newForward, vec3(0,0,0))
 
   # 2. Update the camera's position to follow the player
   updateCamera(dt)

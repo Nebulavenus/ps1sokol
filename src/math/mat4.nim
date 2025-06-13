@@ -100,3 +100,29 @@ proc translate*(translation: Vec3): Mat4 =
   result.m[3][0] = translation.x
   result.m[3][1] = translation.y
   result.m[3][2] = translation.z
+
+proc fromCols*(right, up, forward, translation: Vec3): Mat4 =
+  ## Constructs a 4x4 matrix from its column vectors (basis axes and translation).
+  ## This is useful for creating a rotation/orientation matrix from known direction vectors.
+  result = zero()
+
+  # Set the rotation/orientation part (first 3 columns)
+  result.m[0][0] = right.x
+  result.m[0][1] = right.y
+  result.m[0][2] = right.z
+
+  result.m[1][0] = up.x
+  result.m[1][1] = up.y
+  result.m[1][2] = up.z
+
+  result.m[2][0] = forward.x
+  result.m[2][1] = forward.y
+  result.m[2][2] = forward.z
+
+  # Set the translation part (4th column)
+  result.m[3][0] = translation.x
+  result.m[3][1] = translation.y
+  result.m[3][2] = translation.z
+
+  # Set the bottom row for a standard affine transformation matrix
+  result.m[3][3] = 1.0
