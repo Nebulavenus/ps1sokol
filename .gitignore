@@ -6,3 +6,4 @@ assets/
 nimalyzer.log
 tests/*.exe
 tests/_dynamic
+*.zip

@@ -468,7 +468,7 @@ proc unpackColor(c: uint32): (uint8, uint8, uint8, uint8) {.inline.} =
   let a = ((c and 0xFF000000'u32) shr 24).uint8
   return (r, g, b, a)
 
-proc loadObj(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): (seq[Vertex], seq[uint16]) =
+proc loadObj(fileLines: seq[string]): (seq[Vertex], seq[uint16]) =
   var
     temp_positions: seq[Vec3]
     temp_normals: seq[Vec3]
@@ -477,15 +477,7 @@ proc loadObj(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): (seq[Vertex], 
     out_indices: seq[uint16]
     vertex_cache: Table[string, uint16]
 
-  # Use fs.get() to read the file content
-  let fileContentOpt = fs.get(filename)
-  if fileContentOpt.isNone:
-    echo("Cannot load OBJ file, file not found in embedded FS: " & filename)
-    return
-
-  echo "Starting OBJ Loading from embedded FS: " & filename
-  let fileContent = fileContentOpt.get() # Get the string content
-  for line in fileContent.splitLines(): # Iterate over lines of the string content
+  for line in fileLines:
     if line.startsWith("v "):
       let parts = line.split()
       temp_positions.add(vec3(
@@ -558,10 +550,10 @@ proc loadObj(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): (seq[Vertex], 
           # Vertex already exists, just add its index
           out_indices.add(vertex_cache[key])
 
-  echo "Loaded OBJ $1: $2 vertices, $3 indices" % [$filename, $out_vertices.len, $out_indices.len]
+  echo "Loaded OBJ $1: $2 vertices, $3 indices" % [$out_vertices.len, $out_indices.len]
   return (out_vertices, out_indices)
 
-proc loadPly(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): (seq[Vertex], seq[uint16]) =
+proc loadPly(fileLines: seq[string]): (seq[Vertex], seq[uint16]) =
   ## Loads a 3D model from an ASCII PLY file.
   ##
   ## Features:
@@ -575,12 +567,6 @@ proc loadPly(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): (seq[Vertex], 
     out_vertices: seq[Vertex]
     out_indices: seq[uint16]
 
-  # Use fs.get() to read the file content
-  let fileContentOpt = fs.get(filename)
-  if fileContentOpt.isNone:
-    echo "loadPly: Cannot load PLY file, file not found in embedded FS: " & filename
-    return
-
   # --- 1. Header Parsing ---
   var
     vertexCount = 0
@@ -592,8 +578,6 @@ proc loadPly(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): (seq[Vertex], 
     vertexPropertyCount = 0
     parsingVertex = false
 
-  echo "loadPly: Starting PLY Loading from embedded FS: " & filename
-  let fileLines = fileContentOpt.get().splitLines() # Get content and split into lines
   var bodyStartIndex = -1
 
   for i, line in fileLines:
@@ -774,29 +758,53 @@ proc loadAndProcessMesh(fs: EmbeddedFS|RuntimeEmbeddedFS, modelFilename: string,
     cpuVertices: seq[Vertex]
     cpuIndices: seq[uint16]
 
-  # The cache path still refers to a file on disk
-  #let cachePath = modelPath & ".baked_ao.bin"
-  let cachePath = getAppDir() / (modelFilename & ".baked_ao.bin")
+  # We construct the cache path relative to the RuntimeEmbeddedFS root
+  var cachePath: string
+  when fs is EmbeddedFS:
+    # In true embedded mode, caching must still happen on disk.
+    # getAppDir() is a good place for this.
+    cachePath = getAppDir() / (modelFilename & ".baked_ao.bin")
+  else: # fs is RuntimeEmbeddedFS
+    # In runtime mode, save the cache file *inside* the asset directory.
+    # fs.string holds the base path (e.g., "assets").
+    cachePath = fs.string / (modelFilename & ".baked_ao.bin")
 
   if os.fileExists(cachePath):
     # Load directly from the fast binary cache
     (cpuVertices, cpuIndices) = loadMeshFromCache(cachePath)
   else:
+    var fileLines: seq[string]
+    when fs is EmbeddedFS:
+      let contentOpt = fs.get(modelFilename)
+      if contentOpt.isNone:
+        echo "loadAndProcessMesh: Cannot load model, not found in embedded FS: " & modelFilename
+        return
+      fileLines = contentOpt.get().splitLines()
+      echo "loadAndProcessMesh: Starting model loading from embedded FS: " & modelFilename
+    else: # fs is RuntimeEmbeddedFS
+      let fullPathOnDisk = fs.string / modelFilename
+      if not os.fileExists(fullPathOnDisk):
+        echo "loadAndProcessMesh: Cannot load model, path not found on disk: " & fullPathOnDisk
+        return
+      fileLines = readFile(fullPathOnDisk).splitLines()
+      echo "loadAndProcessMesh: Starting model loading from disk: " & fullPathOnDisk
+
+    # We need to dispatch to the correct loader based on file extension
+    # but the loader needs the already-read content.
+    # So we'll pass `fileLines` instead of `fs` and `modelFilename` to the loaders.
     # Cache not found, do the full loading and baking process
     let fileExt = modelFilename.splitFile.ext
     case fileExt.toLower()
     of ".ply":
-      (cpuVertices, cpuIndices) = loadPly(fs, modelFilename)
+      (cpuVertices, cpuIndices) = loadPly(fileLines)
     of ".obj":
-      (cpuVertices, cpuIndices) = loadObj(fs, modelFilename)
+      (cpuVertices, cpuIndices) = loadObj(fileLines)
     else:
       echo "Unsupported model format: ", fileExt
       return
 
     if cpuVertices.len > 0:
       # Bake Ambient Occlusion with GRID
-      #bakeAmbientOcclusion(cpuVertices, cpuIndices, aoParams)
-      #bakeAmbientOcclusionWithGrid(cpuVertices, cpuIndices, aoParams, gridResolution = 64)
       bakeBentNormalWithGrid(cpuVertices, cpuIndices, aoParams, gridResolution = 64)
       # Save the result to cache for the next run
       saveMeshToCache(cachePath, cpuVertices, cpuIndices)
@@ -893,15 +901,22 @@ type InputState = object
 type State = object
   pip: Pipeline
   passAction: sg.PassAction
-  mesh: Mesh # Track mesh
-  ocean: Mesh # Ocean mesh
-  oceanFrame: float
-  carMesh: Mesh # Player's car mesh
+  # Track meshes
+  trackMesh1: Mesh # Road
+  trackMesh2: Mesh # Shape
+  trackMesh3: Mesh # Grass
+  trackMesh4: Mesh # Trees
+  # Player's car mesh
+  carMesh1: Mesh # Body
+  carMesh2: Mesh # Rear wheel
+  carMesh3: Mesh # Front wheel
+  # Input & Logic
   input: InputState
   player: PlayerVehicle
   cameraOffsetY: float
   cameraPos: Vec3 # Camera's actual world position
   cameraTarget: Vec3 # Point the camera is looking at
+  # Rendering
   vsParams: VsParams
   fsParams: FsParams
   # -- Controlling AO Multi-Layered --
@@ -979,7 +994,6 @@ proc init() {.cdecl.} =
   let assetDir = getAppDir() & DirSep
   let trackPath = assetDir & "track.ply"
   let carPath = assetDir & "car.ply"
-  let oceanPath = assetDir & "ocean.ply"
 
   # Define AO parameters
   let aoParams = AOBakeParams(
@@ -1001,19 +1015,28 @@ proc init() {.cdecl.} =
     magFilter: filterNearest,
   ));
 
-  # Load the mesh. One function handles everything
-  let oceanTexture = loadTexture(ASSETS_FS, "ocean.qoi")
-  let trackTexture = loadTexture(ASSETS_FS, "track.qoi")
-  let carTexture = loadTexture(ASSETS_FS, "car.qoi")
+  # Load the meshes. One function handles everything
+  let trackTexture1 = loadTexture(ASSETS_FS, "map"/"track_road.qoi") # 1
+  let trackTexture2 = loadTexture(ASSETS_FS, "map"/"track_shapetrees.qoi") # 2-3
+  let trackTexture3 = loadTexture(ASSETS_FS, "map"/"track_grass.qoi") # 4
+  let carTexture = loadTexture(ASSETS_FS, "car"/"trueno.qoi")
 
-  var ocean = loadAndProcessMesh(ASSETS_FS, "ocean.ply", aoParams, oceanTexture, pointSmp)
-  var mesh = loadAndProcessMesh(ASSETS_FS, "track.ply", aoParams, trackTexture, pointSmp)
-  var carMesh = loadAndProcessMesh(ASSETS_FS, "car.ply", aoParams, carTexture, pointSmp)
+  var trackMesh1 = loadAndProcessMesh(ASSETS_FS, "map"/"track_road.ply", aoParams, trackTexture1, pointSmp)
+  var trackMesh2 = loadAndProcessMesh(ASSETS_FS, "map"/"track_shape.ply", aoParams, trackTexture2, pointSmp)
+  var trackMesh3 = loadAndProcessMesh(ASSETS_FS, "map"/"track_trees.ply", aoParams, trackTexture2, pointSmp)
+  var trackMesh4 = loadAndProcessMesh(ASSETS_FS, "map"/"track_grass.ply", aoParams, trackTexture3, pointSmp)
+  var carMesh1 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno.ply", aoParams, carTexture, pointSmp)
+  var carMesh2 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_back.ply", aoParams, carTexture, pointSmp)
+  var carMesh3 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_front.ply", aoParams, carTexture, pointSmp)
 
   # Don't forget to save it in state
-  state.mesh = mesh
-  state.ocean = ocean
-  state.carMesh = carMesh
+  state.trackMesh1 = trackMesh1
+  state.trackMesh2 = trackMesh2
+  state.trackMesh3 = trackMesh3
+  state.trackMesh4 = trackMesh4
+  state.carMesh1 = carMesh1
+  state.carMesh2 = carMesh2
+  state.carMesh3 = carMesh3
 
   # --- Setup camera & player ---
   state.player.position = vec3(0.0, 0.2, 0.0)
@@ -1173,22 +1196,6 @@ proc frame() {.cdecl.} =
   sg.applyPipeline(state.pip)
   sg.applyUniforms(shd.ubFsParams, sg.Range(addr: fsParams.addr, size: fsParams.sizeof))
 
-  # --- Draw ocean ---
-  var oceanModel = identity()
-  state.oceanFrame += dt / 1.5
-  let offset = (sin(state.oceanFrame) * 0.4) # adjust the frequency and amplitude as needed
-  let translationMatrix = translate(vec3(0, offset, 0))
-  oceanModel = oceanModel * translationMatrix
-  var oceanVsParams = shd.VsParams(
-    u_mvp: proj * view * oceanModel,
-    u_model: oceanModel,
-    u_camPos: state.cameraPos,
-    u_jitterAmount: 240.0,
-  )
-  sg.applyBindings(state.ocean.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: oceanVsParams.addr, size: oceanVsParams.sizeof))
-  sg.draw(0, state.ocean.indexCount, 1)
-
   # --- Draw track ---
   let trackModel = identity()
   var trackVsParams = shd.VsParams(
@@ -1197,9 +1204,18 @@ proc frame() {.cdecl.} =
     u_camPos: state.cameraPos,
     u_jitterAmount: 240.0,
   )
-  sg.applyBindings(state.mesh.bindings)
+  sg.applyBindings(state.trackMesh1.bindings)
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
-  sg.draw(0, state.mesh.indexCount, 1)
+  sg.draw(0, state.trackMesh1.indexCount, 1)
+  sg.applyBindings(state.trackMesh2.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
+  sg.draw(0, state.trackMesh2.indexCount, 1)
+  sg.applyBindings(state.trackMesh3.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
+  sg.draw(0, state.trackMesh3.indexCount, 1)
+  sg.applyBindings(state.trackMesh4.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
+  sg.draw(0, state.trackMesh4.indexCount, 1)
 
   # --- Draw car ---
   let carModel = translate(state.player.position) * state.player.rotation
@@ -1209,9 +1225,15 @@ proc frame() {.cdecl.} =
     u_camPos: state.cameraPos,
     u_jitterAmount: 240.0,
   )
-  sg.applyBindings(state.carMesh.bindings)
+  sg.applyBindings(state.carMesh1.bindings)
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
-  sg.draw(0, state.carMesh.indexCount, 1)
+  sg.draw(0, state.carMesh1.indexCount, 1)
+  sg.applyBindings(state.carMesh2.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
+  sg.draw(0, state.carMesh2.indexCount, 1)
+  sg.applyBindings(state.carMesh3.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
+  sg.draw(0, state.carMesh3.indexCount, 1)
 
   sg.endPass()
   sg.commit()
