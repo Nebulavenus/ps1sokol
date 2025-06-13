@@ -1,7 +1,8 @@
 build/
 src/shaders/*.nim
 qoi_tests/
-tests/*.exe
 assets/
 *.pdb
 nimalyzer.log
+tests/*.exe
+tests/_dynamic
