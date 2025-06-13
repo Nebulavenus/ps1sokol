@@ -14,13 +14,11 @@ import os
 import streams
 import std/random
 import audio
-import embedfs
+import rtfs
 
-# Declare your embedded file system. This will embed the 'assets' directory
-# relative to where main.nim is compiled.
-# For development, you can set `embed = false` to read directly from disk
-# without recompiling (but ensure the 'assets' folder exists on disk).
-const ASSETS_FS = embedDir("assets", embed = false)
+# Declare your runtime file system.
+# This will always look for an 'assets' folder next to your .exe file.
+var ASSETS_FS: RuntimeFS
 
 type Vertex = object
   x, y, z: float32
@@ -706,13 +704,10 @@ proc loadPly(fileLines: seq[string]): (seq[Vertex], seq[uint16]) =
   return (out_vertices, out_indices)
 
 # --- Caching and mesh processing procedures ---
-proc saveMeshToCache(path: string, vertices: seq[Vertex], indices: seq[uint16]) =
+proc saveMeshToCache(fs: RuntimeFS, path: string, vertices: seq[Vertex], indices: seq[uint16]) =
   ## Saves the processed vertex and index data to a fast binary cache file
   echo "Saving baked mesh to cache: ", path
-  var stream = newFileStream(path, fmWrite)
-  if stream == nil:
-    echo "Error: Could not open cache file for writing: ", path
-    return
+  var stream = newStringStream()
 
   try:
     # Write a simple header: vertex count and index count
@@ -721,16 +716,21 @@ proc saveMeshToCache(path: string, vertices: seq[Vertex], indices: seq[uint16]) 
     # Write the raw data blobs
     stream.writeData(vertices[0].addr, vertices.len * sizeof(Vertex))
     stream.writeData(indices[0].addr, indices.len * sizeof(uint16))
+
+    # Write the memory stream's content to the filesystem
+    fs.write(path, cast[seq[byte]](stream.data))
   finally:
     stream.close()
 
-proc loadMeshFromCache(path: string): (seq[Vertex], seq[uint16]) =
+proc loadMeshFromCache(fs: RuntimeFS, path: string): (seq[Vertex], seq[uint16]) =
   ## Loads vertex and index data from a binary cache file.
   echo "Loading baked mesh from cache: ", path
-  var stream = newFileStream(path, fmRead)
-  if stream == nil:
+  let contentOpt = fs.get(path)
+  if contentOpt.isNone:
     echo "Error: Could not open cache file for reading: ", path
     return
+
+  var stream = newStringStream(contentOpt.get())
 
   var vertices: seq[Vertex]
   var indices: seq[uint16]
@@ -750,7 +750,7 @@ proc loadMeshFromCache(path: string): (seq[Vertex], seq[uint16]) =
 
   return (vertices, indices)
 
-proc loadAndProcessMesh(fs: EmbeddedFS|RuntimeEmbeddedFS, modelFilename: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): Mesh =
+proc loadAndProcessMesh(fs: RuntimeFS, modelFilename: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): Mesh =
   ## High-level procedure to load a mesh.
   ## It will use a cached version if available, otherwise it will load,
   ## bake AO, and save a new version to the cache.
@@ -758,36 +758,20 @@ proc loadAndProcessMesh(fs: EmbeddedFS|RuntimeEmbeddedFS, modelFilename: string,
     cpuVertices: seq[Vertex]
     cpuIndices: seq[uint16]
 
-  # We construct the cache path relative to the RuntimeEmbeddedFS root
-  var cachePath: string
-  when fs is EmbeddedFS:
-    # In true embedded mode, caching must still happen on disk.
-    # getAppDir() is a good place for this.
-    cachePath = getAppDir() / (modelFilename & ".baked_ao.bin")
-  else: # fs is RuntimeEmbeddedFS
-    # In runtime mode, save the cache file *inside* the asset directory.
-    # fs.string holds the base path (e.g., "assets").
-    cachePath = fs.string / (modelFilename & ".baked_ao.bin")
+  # The cache path is now just a relative filename within our FS
+  let cacheFilename = modelFilename & ".baked_ao.bin"
 
-  if os.fileExists(cachePath):
+  if fs.fileExists(cacheFilename):
     # Load directly from the fast binary cache
-    (cpuVertices, cpuIndices) = loadMeshFromCache(cachePath)
+    (cpuVertices, cpuIndices) = loadMeshFromCache(fs, cacheFilename)
   else:
-    var fileLines: seq[string]
-    when fs is EmbeddedFS:
-      let contentOpt = fs.get(modelFilename)
-      if contentOpt.isNone:
-        echo "loadAndProcessMesh: Cannot load model, not found in embedded FS: " & modelFilename
-        return
-      fileLines = contentOpt.get().splitLines()
-      echo "loadAndProcessMesh: Starting model loading from embedded FS: " & modelFilename
-    else: # fs is RuntimeEmbeddedFS
-      let fullPathOnDisk = fs.string / modelFilename
-      if not os.fileExists(fullPathOnDisk):
-        echo "loadAndProcessMesh: Cannot load model, path not found on disk: " & fullPathOnDisk
-        return
-      fileLines = readFile(fullPathOnDisk).splitLines()
-      echo "loadAndProcessMesh: Starting model loading from disk: " & fullPathOnDisk
+    # Read the source model file content using our FS
+    let modelContentOpt = fs.get(modelFilename)
+    if modelContentOpt.isNone:
+      echo "loadAndProcessMesh: Failed to read model file: " & modelFilename
+      return
+
+    let fileLines = modelContentOpt.get().splitLines()
 
     # We need to dispatch to the correct loader based on file extension
     # but the loader needs the already-read content.
@@ -807,7 +791,7 @@ proc loadAndProcessMesh(fs: EmbeddedFS|RuntimeEmbeddedFS, modelFilename: string,
       # Bake Ambient Occlusion with GRID
       bakeBentNormalWithGrid(cpuVertices, cpuIndices, aoParams, gridResolution = 64)
       # Save the result to cache for the next run
-      saveMeshToCache(cachePath, cpuVertices, cpuIndices)
+      saveMeshToCache(fs, cacheFilename, cpuVertices, cpuIndices)
 
   # --- GPU Upload ---
   if cpuVertices.len > 0 and cpuIndices.len > 0:
@@ -826,7 +810,7 @@ proc loadAndProcessMesh(fs: EmbeddedFS|RuntimeEmbeddedFS, modelFilename: string,
   else:
     echo "Error: No vertex data to upload to GPU."
 
-proc loadTexture(fs: EmbeddedFS|RuntimeEmbeddedFS, filename: string): sg.Image =
+proc loadTexture(fs: RuntimeFS, filename: string): sg.Image =
   # Use fs.get() to read the file content
   let qoiContentOpt = fs.get(filename)
   if qoiContentOpt.isNone:
@@ -940,6 +924,9 @@ const
   )
 
 proc init() {.cdecl.} =
+  # Initialize the runtime filesystem first thing.
+  ASSETS_FS = newRuntimeFS("assets")
+
   sg.setup(sg.Desc(
     environment: sglue.environment(),
     logger: sg.Logger(fn: slog.fn),
