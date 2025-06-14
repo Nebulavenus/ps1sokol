@@ -1262,13 +1262,12 @@ proc frame() {.cdecl.} =
   let dt = sapp.frameDuration()
 
   # --- Logic ---
-  # 1. Update player rotation matrix based on yaw from input
   block VehiclePhysics:
     # --- Constants to Tweak ---
     const engineForce = 25.0    # How much power the engine has
     const turningTorque = 50.0   # How quickly the car can start to turn
     const brakeForce = 20.0    # How powerful the brakes are
-    const drag = 0.6            # Air resistance, slows down at high speed
+    const drag = 0.8            # Air resistance, slows down at high speed
     const angularDrag = 2.5     # Stops the car from spinning forever
     const baseGrip = 1.8        # Renamed for clarity: Base grip strength
     const driftGripMultiplier = 0.3 # How much grip is reduced when drifting (e.g., 0.2 means 80% less grip)

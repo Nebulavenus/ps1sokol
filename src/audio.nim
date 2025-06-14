@@ -12,28 +12,29 @@ const
   # --- Engine Sound Parameters ---
   MAX_HARMONICS = 3              # Number of harmonic oscillators
   # Multipliers for each harmonic (e.g., 1st, 2nd, 3rd multiples of fundamental)
-  HARMONIC_FREQS = [1.0, 2.0, 3.0]
+  HARMONIC_FREQS = [1.0, 1.5, 2.5]
 
   # Base volume for each harmonic at low RPM (idle)
   # Tune these to shape the idle sound
-  HARMONIC_LEVELS_LOW_RPM = [0.7, 0.4, 0.1]
+  HARMONIC_LEVELS_LOW_RPM = [0.8, 0.3, 0.1]
   # Base volume for each harmonic at high RPM (revving)
   # Tune these to shape the high-rev sound
-  HARMONIC_LEVELS_HIGH_RPM = [0.4, 0.8, 1.0]
+  HARMONIC_LEVELS_HIGH_RPM = [0.7, 0.4, 0.2]
 
   # --- New Drift Sound Parameters ---
-  DRIFT_RPM_BOOST = 1200.0        # How much RPM boosts when drifting
-  MAX_SCREECH_VOLUME = 1.0       # INCREASE THIS: Max volume of the tire screech (try 0.8 or 1.0)
-  SCREECH_ATTACK_SPEED = 40.0    # INCREASE THIS: How fast screech volume ramps up (make it punchier)
-  SCREECH_DECAY_SPEED = 6.0      # INCREASE THIS: How fast screech volume ramps down (so it lingers a bit)
+  DRIFT_RPM_BOOST = 600.0        # How much RPM boosts when drifting
+  MAX_SCREECH_VOLUME = 0.6       # INCREASE THIS: Max volume of the tire screech (try 0.8 or 1.0)
+  SCREECH_ATTACK_SPEED = 15.0    # INCREASE THIS: How fast screech volume ramps up (make it punchier)
+  SCREECH_DECAY_SPEED = 8.0      # INCREASE THIS: How fast screech volume ramps down (so it lingers a bit)
 
-  SCREECH_BASE_FREQ = 1500.0     # Base frequency of the screech sound (e.g., 1200 Hz)
-  SCREECH_FREQ_JITTER = 250.0    # How much the screech frequency can randomly vary
+  SCREECH_BASE_FREQ = 2300.0     # Base frequency of the screech sound (e.g., 1200 Hz)
+  SCREECH_FREQ_JITTER = 200.0    # How much the screech frequency can randomly vary
   SCREECH_NOISE_MIX = 0.3        # How much white noise to mix with the high-freq tone (0.0 to 1.0)
 
 type
   AudioState = object
     oscillatorPhases: array[MAX_HARMONICS, float32] # Each harmonic needs its own phase
+    screechPhase: float32
 
     targetRpm: float32
     currentRpm: float32
@@ -42,9 +43,9 @@ type
 
     harmonicsVolumes: array[MAX_HARMONICS, float32]
     engineNoiseVolume: float32
-
     currentScreechVolume: float32
-    screechPhase: float32          # ADD THIS: Phase for the screech oscillator
+
+    lastOutputSample: float32
 
 var audioState: AudioState
 var audioSamples: array[SAUDIO_NUM_SAMPLES, float32] # Buffer for samples
@@ -66,6 +67,7 @@ proc audioInit*() =
   audioState.engineNoiseVolume = 0.0
   audioState.currentScreechVolume = 0.0
   audioState.screechPhase = 0.0 # Initialize screech phase
+  audioState.lastOutputSample = 0.0
 
 proc audioShutdown*() =
   saudio.shutdown()
@@ -74,7 +76,7 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool) 
   # Map car speed to target RPM (adjust these ranges to taste)
   const minRpm = 1000.0 # Idle RPM
   const maxRpm = 6000.0 # Max RPM
-  const maxSpeed = 40.0 # Max speed of the car for full RPM
+  const maxSpeed = 20.0 # Max speed of the car for full RPM
   #echo "speed: ", carSpeed, " accel: ", carAccel
 
   # A simple mapping of speed to a target RPM
@@ -131,13 +133,22 @@ proc audioGenerateSamples*() =
 
   let framesToGenerate = min(expectedFrames, SAUDIO_NUM_SAMPLES)
 
+    # --- DYNAMIC LOW-PASS FILTER SETUP ---
+  # Determine the filter's "cutoff" based on RPM.
+  # A higher cutoff means more high frequencies get through (brighter sound).
+  const minFilterCutoff = 0.1  # Very muffled at idle (10% of new sample, 90% of old)
+  const maxFilterCutoff = 0.8  # Bright at high revs (80% of new sample, 20% of old)
+  let rpmNormalized = clamp((audioState.currentRpm - 1000.0) / (6000.0 - 1000.0), 0.0, 1.0)
+  let filterCutoff = lerp(minFilterCutoff, maxFilterCutoff, rpmNormalized)
+  # --- END FILTER SETUP ---
+
   for i in 0..<framesToGenerate:
-    var totalSample = 0.0
+    var rawSample = 0.0
 
     # Sum up harmonic components (Engine base sound)
     for h in 0..<MAX_HARMONICS:
       let harmonicSample = (2.0 * (audioState.oscillatorPhases[h] - floor(audioState.oscillatorPhases[h])) - 1.0)
-      totalSample += harmonicSample * audioState.harmonicsVolumes[h]
+      rawSample += harmonicSample * audioState.harmonicsVolumes[h]
 
       audioState.oscillatorPhases[h] += (audioState.engineFrequency * HARMONIC_FREQS[h]) / SAUDIO_SAMPLE_RATE
 
@@ -147,7 +158,7 @@ proc audioGenerateSamples*() =
         audioState.oscillatorPhases[h] += 1.0
 
     # Add engine noise component
-    totalSample += (rand(-1.0..1.0) * audioState.engineNoiseVolume)
+    rawSample += (rand(-1.0..1.0) * audioState.engineNoiseVolume)
 
     # --- ENHANCED SCREECH NOISE COMPONENT ---
     if audioState.currentScreechVolume > 0.001: # Only generate if audible
@@ -163,7 +174,7 @@ proc audioGenerateSamples*() =
       # Mix the tone and noise
       let mixedScreechSample = (screechTone * (1.0 - SCREECH_NOISE_MIX) + screechNoise * SCREECH_NOISE_MIX)
 
-      totalSample += mixedScreechSample * audioState.currentScreechVolume
+      rawSample += mixedScreechSample * audioState.currentScreechVolume
 
       # Update screech phase (using the jittered frequency)
       audioState.screechPhase += currentScreechFreq / SAUDIO_SAMPLE_RATE
@@ -174,9 +185,17 @@ proc audioGenerateSamples*() =
     # --- END ENHANCED SCREECH NOISE ---
 
     # Apply overall engine volume
-    totalSample *= audioState.engineVolume
+    rawSample *= audioState.engineVolume
+
+    # --- APPLY LOW-PASS FILTER ---
+    # The final sample is a mix of the new raw sample and the previous final sample.
+    let filteredSample = lerp(audioState.lastOutputSample, rawSample, filterCutoff)
+
+    # Store this filtered sample for the next iteration's calculation
+    audioState.lastOutputSample = filteredSample
+    # --- END FILTER ---
 
     # Clamp final sample to prevent clipping
-    audioSamples[i] = clamp(totalSample, -1.0, 1.0)
+    audioSamples[i] = clamp(filteredSample, -1.0, 1.0)
 
   discard saudio.push(addr(audioSamples[0]), framesToGenerate)
