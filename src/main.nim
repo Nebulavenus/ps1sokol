@@ -1019,6 +1019,7 @@ proc init() {.cdecl.} =
   var trackMesh2 = loadAndProcessMesh(ASSETS_FS, "map"/"track_shape.ply", aoParams, trackTexture2, pointSmp)
   var trackMesh3 = loadAndProcessMesh(ASSETS_FS, "map"/"track_trees.ply", aoParams, trackTexture2, pointSmp)
   var trackMesh4 = loadAndProcessMesh(ASSETS_FS, "map"/"track_grass.ply", aoParams, trackTexture3, pointSmp)
+  var trackMesh5 = loadAndProcessMesh(ASSETS_FS, "map"/"track_barrier.ply", aoParams, trackTexture3, pointSmp)
   var carMesh1 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno.ply", aoParams, carTexture, pointSmp)
   var carMesh2 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_back.ply", aoParams, carTexture, pointSmp)
   var carMesh3 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_front.ply", aoParams, carTexture, pointSmp)
@@ -1033,14 +1034,21 @@ proc init() {.cdecl.} =
   state.carMesh3 = carMesh3[0]
 
   # Also save road geometry
-  let (_, roadVertices, roadIndices) = trackMesh1
-  state.roadCollisionVertices = roadVertices
-  state.roadCollisionIndices = roadIndices
+  var (_, roadVertices, roadIndices) = trackMesh1
+  var (_, barrierVertices, barrierIndices) = trackMesh5
+  var rcv: seq[Vertex]
+  var rci: seq[uint16]
+  rcv.add(roadVertices)
+  rci.add(roadIndices)
+  rcv.add(barrierVertices)
+  rci.add(barrierIndices)
+  state.roadCollisionVertices = rcv
+  state.roadCollisionIndices = rci
 
   # --- Setup camera & player ---
-  state.player.position = vec3(0.0, 20, 25.0)
+  state.player.position = vec3(0.0, 12, 25.0)
   state.player.velocity = vec3(0, 0, 0)
-  state.player.yaw = 0.0
+  state.player.yaw = 90.0
   state.player.angularVelocity = 0.0
   state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
 
@@ -1268,22 +1276,27 @@ proc frame() {.cdecl.} =
     # 4. Align Car's Visual Rotation to the Surface
     # We need to construct a new rotation matrix that respects the yaw from player input
     # but also aligns with the surface normal.
-    # 4. Align Car's Visual Rotation to the Surface
-    # We construct the new rotation matrix using the "look at" direction (yaw) and the surface's up vector.
-    # This uses the Gram-Schmidt process to create an orthonormal basis.
-    let playerForward = vec3(sin(state.player.yaw), 0, -cos(state.player.yaw))
 
-    # Calculate the new right vector, perpendicular to both forward and up.
-    let newRight = norm(cross(playerForward, surfaceUp))
+    # Get the car's current forward and right vectors from the *previous frame's* rotation matrix.
+    # This provides a stable basis to work from.
+    let prevForward = state.player.rotation * vec3(0, 0, -1)
+    let prevRight = state.player.rotation * vec3(1, 0, 0)
 
-    # Recalculate the new forward vector to be perpendicular to the new right and up vectors.
-    # This ensures the car points along the track's slope while maintaining its yaw direction.
-    let newForward = norm(cross(surfaceUp, newRight))
+    # The desired new forward direction is determined by player's yaw.
+    # We project the previous right vector onto the horizontal plane and rotate it.
+    # This is more stable than creating the forward vector from scratch.
+    let yawRot = rotate(state.player.angularVelocity * dt, surfaceUp)
+    let newForward = yawRot * prevForward
 
-    # --- CORRECTED ROTATION MATRIX CONSTRUCTION ---
-    # Manually construct the Mat4 rotation matrix from the basis vectors.
-    # Note: The 4th column is for translation, which we handle separately, so it's (0,0,0,1).
-    state.player.rotation = fromCols(newRight, surfaceUp, newForward, vec3(0,0,0))
+    # Now, re-calculate the right vector using the new forward and the surface's up vector.
+    # This makes the car "bank" into turns on sloped surfaces.
+    let newRight = norm(cross(newForward, surfaceUp))
+
+    # Finally, re-calculate the true forward vector to ensure the matrix is orthonormal.
+    let finalForward = norm(cross(surfaceUp, newRight))
+
+    # Construct the new rotation matrix. This is now stable and won't spin out.
+    state.player.rotation = fromCols(newRight, surfaceUp, finalForward, vec3(0,0,0))
 
   # 2. Update the camera's position to follow the player
   updateCamera(dt)
