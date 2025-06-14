@@ -74,7 +74,7 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool) 
   # Map car speed to target RPM (adjust these ranges to taste)
   const minRpm = 1000.0 # Idle RPM
   const maxRpm = 6000.0 # Max RPM
-  const maxSpeed = 20.0 # Max speed of the car for full RPM
+  const maxSpeed = 40.0 # Max speed of the car for full RPM
   #echo "speed: ", carSpeed, " accel: ", carAccel
 
   # A simple mapping of speed to a target RPM
