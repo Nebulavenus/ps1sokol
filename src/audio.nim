@@ -16,20 +16,20 @@ const
 
   # Base volume for each harmonic at low RPM (idle)
   # Tune these to shape the idle sound
-  HARMONIC_LEVELS_LOW_RPM = [1.0, 0.2, 0.05]
+  HARMONIC_LEVELS_LOW_RPM = [0.7, 0.4, 0.1]
   # Base volume for each harmonic at high RPM (revving)
   # Tune these to shape the high-rev sound
-  HARMONIC_LEVELS_HIGH_RPM = [0.8, 0.5, 0.3]
+  HARMONIC_LEVELS_HIGH_RPM = [0.4, 0.8, 1.0]
 
   # --- New Drift Sound Parameters ---
-  DRIFT_RPM_BOOST = 500.0        # How much RPM boosts when drifting
-  MAX_SCREECH_VOLUME = 0.7       # INCREASE THIS: Max volume of the tire screech (try 0.8 or 1.0)
-  SCREECH_ATTACK_SPEED = 15.0    # INCREASE THIS: How fast screech volume ramps up (make it punchier)
-  SCREECH_DECAY_SPEED = 4.0      # INCREASE THIS: How fast screech volume ramps down (so it lingers a bit)
+  DRIFT_RPM_BOOST = 1200.0        # How much RPM boosts when drifting
+  MAX_SCREECH_VOLUME = 1.0       # INCREASE THIS: Max volume of the tire screech (try 0.8 or 1.0)
+  SCREECH_ATTACK_SPEED = 40.0    # INCREASE THIS: How fast screech volume ramps up (make it punchier)
+  SCREECH_DECAY_SPEED = 6.0      # INCREASE THIS: How fast screech volume ramps down (so it lingers a bit)
 
-  SCREECH_BASE_FREQ = 800.0     # Base frequency of the screech sound (e.g., 1200 Hz)
-  SCREECH_FREQ_JITTER = 200.0    # How much the screech frequency can randomly vary
-  SCREECH_NOISE_MIX = 0.7        # How much white noise to mix with the high-freq tone (0.0 to 1.0)
+  SCREECH_BASE_FREQ = 1500.0     # Base frequency of the screech sound (e.g., 1200 Hz)
+  SCREECH_FREQ_JITTER = 250.0    # How much the screech frequency can randomly vary
+  SCREECH_NOISE_MIX = 0.3        # How much white noise to mix with the high-freq tone (0.0 to 1.0)
 
 type
   AudioState = object
@@ -75,7 +75,7 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool) 
   const minRpm = 1000.0 # Idle RPM
   const maxRpm = 6000.0 # Max RPM
   const maxSpeed = 20.0 # Max speed of the car for full RPM
-  #echo "speed: ", carSpeed, " accel: ", carAccel
+  echo "speed: ", carSpeed, " accel: ", carAccel
 
   # A simple mapping of speed to a target RPM
   var baseTargetRpm = minRpm + (maxRpm - minRpm) * clamp(abs(carSpeed) / maxSpeed, 0.0, 1.0)
@@ -87,11 +87,11 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool) 
   # --- END DRIFT RPM BOOST ---
 
   # Smoothly interpolate current RPM towards target RPM for less jarring changes
-  const rpmSmoothingFactor = 1.5 # How fast currentRpm catches up to targetRpm
+  const rpmSmoothingFactor = 4.0 # How fast currentRpm catches up to targetRpm
   audioState.currentRpm = lerp(audioState.currentRpm, audioState.targetRpm, clamp(sapp.frameDuration() * rpmSmoothingFactor, 0.0, 1.0))
 
   # Convert RPM to a base frequency (fundamental)
-  const freqPerRpm = 0.01 # Tune this to get desired pitch range
+  const freqPerRpm = 0.025 # Tune this to get desired pitch range
   audioState.engineFrequency = audioState.currentRpm * freqPerRpm
 
   # --- Dynamic Sound Shaping ---
@@ -108,9 +108,9 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool) 
   audioState.engineNoiseVolume = clamp(audioState.engineNoiseVolume, 0.0, 0.2) # Clamp noise to prevent it dominating
 
   # Modulate overall volume based on acceleration and speed
-  const baseVolume = 0.3
-  const accelVolumeBoost = 0.4 # How much acceleration impacts volume
-  const minSpeedVolume = 0.2 # Minimum volume even when stopped
+  const baseVolume = 0.2
+  const accelVolumeBoost = 0.7 # How much acceleration impacts volume
+  const minSpeedVolume = 0.1 # Minimum volume even when stopped
 
   # Basic volume scales with speed
   let speedVolume = minSpeedVolume + (1.0 - minSpeedVolume) * clamp(abs(carSpeed) / maxSpeed, 0.0, 1.0)
