@@ -897,6 +897,8 @@ type State = object
   # CPU-side collision geometry for the road
   roadCollisionVertices: seq[Vertex]
   roadCollisionIndices: seq[uint16]
+  barrierCollisionVertices: seq[Vertex]
+  barrierCollisionIndices: seq[uint16]
   # Player's car mesh
   carMesh1: Mesh # Body
   carMesh2: Mesh # Rear wheel
@@ -1035,15 +1037,11 @@ proc init() {.cdecl.} =
 
   # Also save road geometry
   var (_, roadVertices, roadIndices) = trackMesh1
-  var (_, barrierVertices, barrierIndices) = trackMesh5
-  var rcv: seq[Vertex]
-  var rci: seq[uint16]
-  rcv.add(roadVertices)
-  rci.add(roadIndices)
-  rcv.add(barrierVertices)
-  rci.add(barrierIndices)
-  state.roadCollisionVertices = rcv
-  state.roadCollisionIndices = rci
+  var (_, barrierVertices, barrierIndices) = trackMesh2
+  state.roadCollisionVertices = roadVertices
+  state.roadCollisionIndices = roadIndices
+  state.barrierCollisionVertices = barrierVertices
+  state.barrierCollisionIndices = barrierIndices
 
   # --- Setup camera & player ---
   state.player.position = vec3(0.0, 12, 25.0)
@@ -1180,6 +1178,77 @@ proc getSurfaceInfo(carPos: Vec3): Option[SurfaceHit] =
   else:
     return none[SurfaceHit]()
 
+type CollisionResponse = object
+  pushOut: Vec3
+  collided: bool
+
+proc checkBarrierCollisions(carPos: Vec3, carRotation: Mat4): CollisionResponse =
+  ## Casts rays horizontally from the car to detect and respond to barrier collisions.
+  const carWidth = 0.8  # Half the width of the car
+  const carLength = 1.5 # Half the length of the car
+  const collisionRayLength = 1.5 # How far out to check for collisions
+
+  # Define the local-space origins for our collision rays
+  # (front-right, front-left, back-right, back-left)
+  let rayOriginsLocal = [
+    vec3( carWidth, 0.2, -carLength), # Front-right corner
+    vec3(-carWidth, 0.2, -carLength), # Front-left corner
+    vec3( carWidth, 0.2,  carLength), # Back-right corner
+    vec3(-carWidth, 0.2,  carLength), # Back-left corner
+  ]
+
+  # Get the car's current right and forward vectors
+  let carRight = carRotation * vec3(1, 0, 0)
+  let carForward = carRotation * vec3(0, 0, -1)
+
+  # Define the directions to cast rays in world space
+  let rayDirections = [carRight, -carRight, carForward, -carForward]
+
+  for localOrigin in rayOriginsLocal:
+    # Convert the local ray origin to world space
+    let worldOrigin = carPos + (carRotation * localOrigin)
+
+    for rayDir in rayDirections:
+      # Brute-force check against all triangles in the barrier collision mesh
+      for i in 0 ..< (state.barrierCollisionIndices.len div 3):
+        let i0 = state.barrierCollisionIndices[i * 3 + 0]
+        let i1 = state.barrierCollisionIndices[i * 3 + 1]
+        let i2 = state.barrierCollisionIndices[i * 3 + 2]
+
+        let v0 = vec3(state.barrierCollisionVertices[i0].x, state.barrierCollisionVertices[i0].y, state.barrierCollisionVertices[i0].z)
+        let v1 = vec3(state.barrierCollisionVertices[i1].x, state.barrierCollisionVertices[i1].y, state.barrierCollisionVertices[i1].z)
+        let v2 = vec3(state.barrierCollisionVertices[i2].x, state.barrierCollisionVertices[i2].y, state.barrierCollisionVertices[i2].z)
+
+        let dist = rayTriangleIntersectDist(worldOrigin, rayDir, v0, v1, v2, collisionRayLength)
+
+        if dist >= 0:
+          # --- COLLISION DETECTED ---
+          # 1. Calculate the normal of the wall we hit
+          var wallNormal = norm(cross(v1 - v0, v2 - v0))
+
+          # --- THIS IS THE CRUCIAL FIX ---
+          # The normal should oppose the ray that hit it.
+          # If the dot product is positive, it means the normal is pointing in a similar
+          # direction as the ray, so it's pointing "inward". We need to flip it.
+          if dot(wallNormal, rayDir) > 0:
+            #wallNormal *= -1.0
+            wallNormal = wallNormal * -1.0
+          # --- END FIX ---
+
+          # 2. Calculate how much we need to push the car out
+          let penetrationDepth = collisionRayLength - dist
+          result.pushOut += wallNormal * penetrationDepth
+          result.collided = true
+
+          # --- Optional: Collision Response on Velocity (Sliding) ---
+          # Project the car's velocity onto the wall normal (the part of the speed heading INTO the wall)
+          let velAlongNormal = dot(state.player.velocity, wallNormal)
+          # If we are moving into the wall, remove that component of velocity
+          if velAlongNormal < 0:
+            state.player.velocity -= wallNormal * velAlongNormal * 1.1 # 1.1 provides a slight bounce
+
+  return result
+
 proc frame() {.cdecl.} =
   #let dt = sapp.frameDuration() * 60f
   let dt = sapp.frameDuration()
@@ -1234,8 +1303,21 @@ proc frame() {.cdecl.} =
 
     # 2. Update Rotation and Position from Velocities
     state.player.yaw += state.player.angularVelocity * dt
-    state.player.position += state.player.velocity * dt
+    # Calculate the new position but don't assign it to state.player.position yet
+    #state.player.position += state.player.velocity * dt
+    var nextPosition = state.player.position + state.player.velocity * dt
     state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+
+    # --- NEW: Barrier Collision Check & Response ---
+    # We use the rotation from the PREVIOUS frame for this check
+    let collisionInfo = checkBarrierCollisions(nextPosition, state.player.rotation)
+    if collisionInfo.collided:
+      # Apply the push-out vector to correct the position
+      nextPosition += collisionInfo.pushOut
+
+    # Assign the final, corrected position
+    state.player.position = nextPosition
+    # --- END Barrier Collision ---
 
     # --- Ground Following and Alignment ---
     var surfaceUp = vec3.up() # Default up vector
@@ -1244,7 +1326,7 @@ proc frame() {.cdecl.} =
     if surfaceInfoOpt.isSome:
       let surfaceInfo = surfaceInfoOpt.get()
       # Snap car's height to the ground
-      state.player.position.y = surfaceInfo.pos.y
+      state.player.position.y = surfaceInfo.pos.y + 0.2
       surfaceUp = surfaceInfo.normal
     else:
       # Optional: Handle what happens when the car is off the track (e.g., reset, fall)

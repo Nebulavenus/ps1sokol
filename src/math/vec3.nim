@@ -26,6 +26,14 @@ proc `+=`*(v0: var Vec3, v1: Vec3) =
   v0.z += v1.z
   #result = Vec3(x: v0.x + v1.x, y: v0.y + v1.y, z: v0.z + v1.z)
 
+proc `-`*(v: var Vec3) =
+  v.x = -v.x
+  v.y = -v.y
+  v.z = -v.z
+
+proc `-`*(v: Vec3): Vec3 =
+  result = Vec3(x: -v.x, y: -v.y, z: -v.z)
+
 proc `-`*(v0: Vec3, v1: Vec3): Vec3 =
   result = Vec3(x: v0.x - v1.x, y: v0.y - v1.y, z: v0.z - v1.z)
 
