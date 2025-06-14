@@ -75,7 +75,7 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool) 
   const minRpm = 1000.0 # Idle RPM
   const maxRpm = 6000.0 # Max RPM
   const maxSpeed = 20.0 # Max speed of the car for full RPM
-  echo "speed: ", carSpeed, " accel: ", carAccel
+  #echo "speed: ", carSpeed, " accel: ", carAccel
 
   # A simple mapping of speed to a target RPM
   var baseTargetRpm = minRpm + (maxRpm - minRpm) * clamp(abs(carSpeed) / maxSpeed, 0.0, 1.0)

@@ -2,6 +2,7 @@ import sokol/log as slog
 import sokol/app as sapp
 import sokol/gfx as sg
 import sokol/glue as sglue
+import sokol/debugtext as sdtx
 import shaders/default as shd
 import math/vec2
 import math/vec3
@@ -13,6 +14,7 @@ import tables
 import os
 import streams
 import std/random
+import std/strformat
 import audio
 import rtfs
 
@@ -909,6 +911,8 @@ type State = object
   cameraOffsetY: float
   cameraPos: Vec3 # Camera's actual world position
   cameraTarget: Vec3 # Point the camera is looking at
+  debugSpeed: float32
+  debugAcceleration: float32
   # Rendering
   vsParams: VsParams
   fsParams: FsParams
@@ -941,6 +945,10 @@ proc init() {.cdecl.} =
     logger: sg.Logger(fn: slog.fn),
   ))
   audioInit()
+  sdtx.setup(sdtx.Desc(
+    logger: sdtx.Logger(fn: slog.fn),
+    fonts: [ sdtx.fontKc853() ]
+  ))
 
   case sg.queryBackend():
     of backendGlcore: echo "using GLCORE33 backend"
@@ -978,7 +986,7 @@ proc init() {.cdecl.} =
     ),
     indexType: indexTypeUint16,
     #faceWinding: faceWindingCcw,
-    #cullMode: cullModeBack,
+    # Models are completly broken either in CW or CCW winding order, so keep it here like this
     cullMode: cullModeNone,
     depth: DepthState(
       compare: compareFuncLessEqual,
@@ -1326,7 +1334,7 @@ proc frame() {.cdecl.} =
     if surfaceInfoOpt.isSome:
       let surfaceInfo = surfaceInfoOpt.get()
       # Snap car's height to the ground
-      state.player.position.y = surfaceInfo.pos.y + 0.2
+      state.player.position.y = surfaceInfo.pos.y + 0.9
       surfaceUp = surfaceInfo.normal
     else:
       # Optional: Handle what happens when the car is off the track (e.g., reset, fall)
@@ -1336,10 +1344,13 @@ proc frame() {.cdecl.} =
     # This is the magic that makes the car feel like it's driving, not just floating.
     # It gradually turns the car's momentum vector to match the way the car is pointing.
     let currentSpeed = len(state.player.velocity)
-
     # --- Calculate Speed and Acceleration for Audio ---
     let carAccel = (currentSpeed - len(prevVelocity)) / dt
     updateEngineSound(currentSpeed, carAccel, state.input.drift)
+
+    # Debug print them
+    state.debugSpeed = currentSpeed
+    state.debugAcceleration = carAccel
 
     # Handle zero velocity for norm() safely for lerp's first argument
     # If speed is very low, assume velocity direction is forward to avoid NaN from norm(zero_vec)
@@ -1424,7 +1435,7 @@ proc frame() {.cdecl.} =
     u_mvp: proj * view * carModel,
     u_model: carModel,
     u_camPos: state.cameraPos,
-    u_jitterAmount: 240.0,
+    u_jitterAmount: sapp.heightf(),
   )
   sg.applyBindings(state.carMesh1.bindings)
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
@@ -1436,10 +1447,26 @@ proc frame() {.cdecl.} =
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
   sg.draw(0, state.carMesh3.indexCount, 1)
 
+  # --- Draw text & ui
+  sdtx.canvas(sapp.widthf()*0.5, sapp.heightf()*0.5) # Full window size & also to scale font
+  sdtx.origin(1.0, 1.0) # Set origin to top-left for easy positioning
+  sdtx.home() # Move cursor to origin (1,1)
+
+  sdtx.color3f(1.0, 1.0, 0.0) # Yellow collor
+
+  # Use strformat to create the formatted strings and convert to C-string for sdtx
+  sdtx.puts((&"Speed: {state.debugSpeed:5.2f}\n").cstring)
+  sdtx.puts((&"Accel: {state.debugAcceleration:5.2f}\n").cstring)
+
+  # Draw the text buffer to the screen
+  sdtx.draw()
+
+  # --- GPU render it please ---
   sg.endPass()
   sg.commit()
 
 proc cleanup() {.cdecl.} =
+  sdtx.shutdown()
   audioShutdown()
   sg.shutdown()
 

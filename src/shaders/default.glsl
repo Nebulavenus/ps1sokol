@@ -29,7 +29,7 @@ out float v_dist;
 out vec3 v_bentNormal;
 
 // Simple directional light
-const vec3 lightDir = vec3(0.0, 0.0, -2.0);
+const vec3 lightDir = vec3(0.0, 10.0, -2.0);
 
 void main() {
     // --- 1. Vertex Jitter (GTE Precision Emulation) ---
@@ -138,6 +138,11 @@ void main() {
     vec4 tex_color = texture(sampler2D(u_texture, u_sampler), final_uv);
     vec3 base_color = tex_color.rgb * v_color.rgb; // Also applies vertex paint
     vec3 final_color = base_color;
+
+    // Trees have black color in texture, they can be used to discard rendering this fragment
+    if (tex_color.rgb == vec3(0.0)) {
+        discard; // Discard the fragment if it's black
+    }
 
     // --- 3. Layered Ambient Occlusion ---
     // With Bent Normal Lighting
