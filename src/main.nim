@@ -17,7 +17,9 @@ import std/random
 import std/strformat
 import audio
 import rtfs
-import nimprof
+
+when defined(profiler):
+  import nimprof
 
 # Declare your runtime file system.
 # This will always look for an 'assets' folder next to your .exe file.
@@ -952,7 +954,7 @@ proc init() {.cdecl.} =
   ))
 
   # Load the entire music
-  loadMusic(ASSETS_FS, "music/5.qoa")
+  loadMusic(ASSETS_FS, "music/sunset_relay.qoa")
 
   case sg.queryBackend():
     of backendGlcore: echo "using GLCORE33 backend"
@@ -1024,14 +1026,14 @@ proc init() {.cdecl.} =
   ));
 
   # Load the meshes. One function handles everything
-  let trackTexture1 = loadTexture(ASSETS_FS, "map2"/"track_road.qoi") # 1
-  let trackTexture2 = loadTexture(ASSETS_FS, "map2"/"track_trees.qoi") # 2-3
-  #let trackTexture3 = loadTexture(ASSETS_FS, "map"/"track_grass.qoi") # 4
+  let trackTexture1 = loadTexture(ASSETS_FS, "map2"/"track_road.qoi")
+  let trackTexture2 = loadTexture(ASSETS_FS, "map2"/"track_shape.qoi")
+  let trackTexture3 = loadTexture(ASSETS_FS, "map2"/"track_trees.qoi")
   let carTexture = loadTexture(ASSETS_FS, "car"/"trueno.qoi")
 
   var trackMesh1 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_road.ply", aoParams, trackTexture1, pointSmp)
-  var trackMesh2 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_shape.ply", aoParams, trackTexture1, pointSmp)
-  var trackMesh3 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_trees.ply", aoParams, trackTexture2, pointSmp)
+  var trackMesh2 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_shape.ply", aoParams, trackTexture2, pointSmp)
+  var trackMesh3 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_trees.ply", aoParams, trackTexture3, pointSmp)
   #var trackMesh4 = loadAndProcessMesh(ASSETS_FS, "map"/"track_grass.ply", aoParams, trackTexture3, pointSmp)
   var trackMesh5 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_barrier.ply", aoParams, trackTexture1, pointSmp)
   var carMesh1 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno.ply", aoParams, carTexture, pointSmp)
