@@ -950,6 +950,9 @@ proc init() {.cdecl.} =
     fonts: [ sdtx.fontKc853() ]
   ))
 
+  # Load music
+  loadMusic(ASSETS_FS, "music.qoa")
+
   case sg.queryBackend():
     of backendGlcore: echo "using GLCORE33 backend"
     of backendD3d11: echo "using D3D11 backend"
@@ -1256,6 +1259,7 @@ proc checkBarrierCollisions(carPos: Vec3, carRotation: Mat4): CollisionResponse 
           let velAlongNormal = dot(state.player.velocity, wallNormal)
           # If we are moving into the wall, remove that component of velocity
           if velAlongNormal < 0:
+            state.player.velocity = state.player.velocity * 0.98 # Slow down a bit
             state.player.velocity -= wallNormal * velAlongNormal * 1.1 # 1.1 provides a slight bounce
 
   return result
@@ -1268,7 +1272,6 @@ proc frame() {.cdecl.} =
   block VehiclePhysics:
     # --- Constants to Tweak ---
     const engineForce = 25.0    # How much power the engine has
-    const turningTorque = 50.0   # How quickly the car can start to turn
     const brakeForce = 20.0    # How powerful the brakes are
     const drag = 0.8            # Air resistance, slows down at high speed
     const angularDrag = 2.5     # Stops the car from spinning forever
@@ -1276,36 +1279,48 @@ proc frame() {.cdecl.} =
     const driftGripMultiplier = 0.3 # How much grip is reduced when drifting (e.g., 0.2 means 80% less grip)
     const driftTurningMultiplier = 1.2 # How much more torque you get when drifting
 
+    # --- NEW, IMPROVED TURNING CONSTANTS ---
+    # Torque is now determined by speed for better control.
+    const lowSpeedTurnTorque = 60.0    # High torque for sharp turns at low speed
+    const highSpeedTurnTorque = 30.0   # Lower torque for stability at high speed
+    const speedForMaxTurnDampening = 18.0 # The speed at which turning is most dampened (reduced)
+
     # Store previous velocity to calculate acceleration later
     let prevVelocity = state.player.velocity
 
     # --- APPLY FORCES FROM INPUT ---
     let forwardDir = state.player.rotation * vec3(0, 0, -1)
 
-    # Determine current grip and turning torque based on drift state
-    var currentGrip = baseGrip
-    var currentTurningTorque = turningTorque
-
-    if state.input.drift:
-      currentGrip *= driftGripMultiplier
-      currentTurningTorque *= driftTurningMultiplier
-
     if state.input.accelerate:
       state.player.velocity += forwardDir * engineForce * dt
 
     if state.input.brake:
       # Brakes are more effective if they oppose the current velocity
-      if len(state.player.velocity) > 0.1:
+      if len(state.player.velocity) > 5.0:
         state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
+      else:
+        # If velocity is small brakes are not working and we can ride backwards
+        state.player.velocity -= forwardDir * engineForce * dt
 
-    # Use the currentTurningTorque here
-    let turnFactor = pow(len(state.player.velocity) / 10, 2)
+    # --- NEW TURNING PHYSICS ---
+    # Calculate an "effectiveness" factor from 0.0 to 1.0 based on speed.
+    let currentSpeed1 = len(state.player.velocity)
+    let turnDampeningFactor = clamp(currentSpeed1 / speedForMaxTurnDampening, 0.0, 1.0)
+
+    # Interpolate between the low and high speed torque values.
+    # When speed is 0, we use lowSpeedTurnTorque. As speed increases, we move towards highSpeedTurnTorque.
+    var effectiveTurningTorque = lerp(lowSpeedTurnTorque, highSpeedTurnTorque, turnDampeningFactor)
+
+    # Apply drift bonus to the current effective torque
+    if state.input.drift:
+      effectiveTurningTorque *= driftTurningMultiplier
+
+    # Apply the final calculated torque
     if state.input.turnLeft:
-      state.player.angularVelocity += currentTurningTorque * dt * turnFactor
-
+      state.player.angularVelocity += effectiveTurningTorque * dt
     if state.input.turnRight:
-      state.player.angularVelocity -= currentTurningTorque * dt * turnFactor
-    # --- END INPUT FORCES ---
+      state.player.angularVelocity -= effectiveTurningTorque * dt
+    # --- END NEW TURNING PHYSICS ---
 
     # 1. Apply Drag/Friction
     state.player.velocity = state.player.velocity * (1.0 - (drag * dt))
@@ -1314,7 +1329,6 @@ proc frame() {.cdecl.} =
     # 2. Update Rotation and Position from Velocities
     state.player.yaw += state.player.angularVelocity * dt
     # Calculate the new position but don't assign it to state.player.position yet
-    #state.player.position += state.player.velocity * dt
     var nextPosition = state.player.position + state.player.velocity * dt
     state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
 
@@ -1324,7 +1338,6 @@ proc frame() {.cdecl.} =
     if collisionInfo.collided:
       # Apply the push-out vector to correct the position
       nextPosition += collisionInfo.pushOut
-
     # Assign the final, corrected position
     state.player.position = nextPosition
     # --- END Barrier Collision ---
@@ -1349,10 +1362,14 @@ proc frame() {.cdecl.} =
     # --- Calculate Speed and Acceleration for Audio ---
     let carAccel = (currentSpeed - len(prevVelocity)) / dt
     updateEngineSound(currentSpeed, carAccel, state.input.drift)
-
-    # Debug print them
+    # For ui debug
     state.debugSpeed = currentSpeed
     state.debugAcceleration = carAccel
+
+    # Drifting
+    var currentGrip = baseGrip
+    if state.input.drift:
+      currentGrip *= driftGripMultiplier
 
     # Handle zero velocity for norm() safely for lerp's first argument
     # If speed is very low, assume velocity direction is forward to avoid NaN from norm(zero_vec)
