@@ -951,8 +951,8 @@ proc init() {.cdecl.} =
     fonts: [ sdtx.fontKc853() ]
   ))
 
-  # Load the entire music directory into a shuffled playlist
-  loadPlaylist(ASSETS_FS, "music")
+  # Load the entire music
+  loadMusic(ASSETS_FS, "music/5.qoa")
 
   case sg.queryBackend():
     of backendGlcore: echo "using GLCORE33 backend"
