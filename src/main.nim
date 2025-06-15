@@ -1275,15 +1275,15 @@ proc frame() {.cdecl.} =
     const brakeForce = 20.0    # How powerful the brakes are
     const drag = 0.8            # Air resistance, slows down at high speed
     const angularDrag = 2.5     # Stops the car from spinning forever
-    const baseGrip = 1.8        # Renamed for clarity: Base grip strength
-    const driftGripMultiplier = 0.3 # How much grip is reduced when drifting (e.g., 0.2 means 80% less grip)
-    const driftTurningMultiplier = 1.2 # How much more torque you get when drifting
+    const baseGrip = 1.8        # Base grip strength
+    const driftGripMultiplier = 0.3 # How much grip is reduced when drifting
+    const driftTurningMultiplier = 2.2 # How much more torque you get when drifting
 
     # --- NEW, IMPROVED TURNING CONSTANTS ---
     # Torque is now determined by speed for better control.
-    const lowSpeedTurnTorque = 60.0    # High torque for sharp turns at low speed
-    const highSpeedTurnTorque = 30.0   # Lower torque for stability at high speed
-    const speedForMaxTurnDampening = 18.0 # The speed at which turning is most dampened (reduced)
+    const lowSpeedTurnTorque = 120.0    # High torque for sharp turns at low speed
+    const highSpeedTurnTorque = 60.0   # Lower torque for stability at high speed
+    const speedForMaxTurnDampening = 40.0 # The speed at which turning is most dampened (reduced)
 
     # Store previous velocity to calculate acceleration later
     let prevVelocity = state.player.velocity
@@ -1328,22 +1328,19 @@ proc frame() {.cdecl.} =
 
     # 2. Update Rotation and Position from Velocities
     state.player.yaw += state.player.angularVelocity * dt
-    # Calculate the new position but don't assign it to state.player.position yet
     var nextPosition = state.player.position + state.player.velocity * dt
     state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
 
-    # --- NEW: Barrier Collision Check & Response ---
-    # We use the rotation from the PREVIOUS frame for this check
+    # Barrier Collision Check & Response
     let collisionInfo = checkBarrierCollisions(nextPosition, state.player.rotation)
     if collisionInfo.collided:
       # Apply the push-out vector to correct the position
       nextPosition += collisionInfo.pushOut
     # Assign the final, corrected position
     state.player.position = nextPosition
-    # --- END Barrier Collision ---
 
-    # --- Ground Following and Alignment ---
-    var surfaceUp = vec3.up() # Default up vector
+    # Ground Following and Alignment
+    var surfaceUp = vec3.up()
     let surfaceInfoOpt = getSurfaceInfo(state.player.position)
 
     if surfaceInfoOpt.isSome:
@@ -1352,7 +1349,6 @@ proc frame() {.cdecl.} =
       state.player.position.y = surfaceInfo.pos.y + 0.9
       surfaceUp = surfaceInfo.normal
     else:
-      # Optional: Handle what happens when the car is off the track (e.g., reset, fall)
       state.player.position.y -= 9.8 * dt # Simple gravity
 
     # 3. Align Velocity with Forward Direction (The "Grip" part)
@@ -1374,7 +1370,6 @@ proc frame() {.cdecl.} =
     # Handle zero velocity for norm() safely for lerp's first argument
     # If speed is very low, assume velocity direction is forward to avoid NaN from norm(zero_vec)
     let velocityDirection = if currentSpeed > 0.01: norm(state.player.velocity) else: forwardDir
-
     # Use the calculated currentGrip for the lerp factor
     let newVelocityDir = norm(lerpV(velocityDirection, forwardDir, clamp(currentGrip * dt, 0.0, 1.0)))
 
