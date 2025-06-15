@@ -1,5 +1,11 @@
 ## IGNITE YOUR NOSTALGIA: The Ultimate PS1-Style Arcade Racer Has Arrived!
 
+Quick Vibe Coding Experiment to develop game in Nim + Sokol
+
+[itch.io](https://abyss-inhabitant.itch.io/arcade-ps1-style-racing-game)
+
+To compile from source you need Nim 2.2.4 and sokol-nim@07bd978
+
 Prepare for a turbocharged blast from the past with **[Your Game's Name Here]**! Immerse yourself in the gritty, low-fidelity glory of the 32-bit era, reimagined with meticulous attention to detail and modern performance. This isn't just a game; it's a love letter to the golden age of polygon racing!
 
 ---
@@ -51,6 +57,7 @@ Developed with a robust, custom pipeline:
 *   **Brake / Reverse:** `S`
 *   **Steer Left:** `A`
 *   **Steer Right:** `D`
+*   **Reset Car:** `R`
 *   **Drift:** `SPACEBAR` (or `LShift`)
 *   **Quit Game:** `ESC`
 *   **Control AO:** `0123456`
