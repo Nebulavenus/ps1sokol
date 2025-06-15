@@ -908,7 +908,7 @@ type State = object
   # Input & Logic
   input: InputState
   player: PlayerVehicle
-  cameraOffsetY: float
+  cameraOffsetY: float32
   cameraPos: Vec3 # Camera's actual world position
   cameraTarget: Vec3 # Point the camera is looking at
   debugSpeed: float32
@@ -1001,7 +1001,7 @@ proc init() {.cdecl.} =
 
   # Define AO parameters
   let aoParams = AOBakeParams(
-    numRays: 32,
+    numRays: 64,
     maxDistance: 2.0,
     intensity: 1.0,
     bias: 0.001,
@@ -1020,16 +1020,16 @@ proc init() {.cdecl.} =
   ));
 
   # Load the meshes. One function handles everything
-  let trackTexture1 = loadTexture(ASSETS_FS, "map"/"track_road.qoi") # 1
-  let trackTexture2 = loadTexture(ASSETS_FS, "map"/"track_shapetrees.qoi") # 2-3
-  let trackTexture3 = loadTexture(ASSETS_FS, "map"/"track_grass.qoi") # 4
+  let trackTexture1 = loadTexture(ASSETS_FS, "map2"/"track_road.qoi") # 1
+  let trackTexture2 = loadTexture(ASSETS_FS, "map2"/"track_trees.qoi") # 2-3
+  #let trackTexture3 = loadTexture(ASSETS_FS, "map"/"track_grass.qoi") # 4
   let carTexture = loadTexture(ASSETS_FS, "car"/"trueno.qoi")
 
-  var trackMesh1 = loadAndProcessMesh(ASSETS_FS, "map"/"track_road.ply", aoParams, trackTexture1, pointSmp)
-  var trackMesh2 = loadAndProcessMesh(ASSETS_FS, "map"/"track_shape.ply", aoParams, trackTexture2, pointSmp)
-  var trackMesh3 = loadAndProcessMesh(ASSETS_FS, "map"/"track_trees.ply", aoParams, trackTexture2, pointSmp)
-  var trackMesh4 = loadAndProcessMesh(ASSETS_FS, "map"/"track_grass.ply", aoParams, trackTexture3, pointSmp)
-  var trackMesh5 = loadAndProcessMesh(ASSETS_FS, "map"/"track_barrier.ply", aoParams, trackTexture3, pointSmp)
+  var trackMesh1 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_road.ply", aoParams, trackTexture1, pointSmp)
+  var trackMesh2 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_shape.ply", aoParams, trackTexture1, pointSmp)
+  var trackMesh3 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_trees.ply", aoParams, trackTexture2, pointSmp)
+  #var trackMesh4 = loadAndProcessMesh(ASSETS_FS, "map"/"track_grass.ply", aoParams, trackTexture3, pointSmp)
+  var trackMesh5 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_barrier.ply", aoParams, trackTexture1, pointSmp)
   var carMesh1 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno.ply", aoParams, carTexture, pointSmp)
   var carMesh2 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_back.ply", aoParams, carTexture, pointSmp)
   var carMesh3 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_front.ply", aoParams, carTexture, pointSmp)
@@ -1038,14 +1038,14 @@ proc init() {.cdecl.} =
   state.trackMesh1 = trackMesh1[0]
   state.trackMesh2 = trackMesh2[0]
   state.trackMesh3 = trackMesh3[0]
-  state.trackMesh4 = trackMesh4[0]
+  #state.trackMesh4 = trackMesh4[0]
   state.carMesh1 = carMesh1[0]
   state.carMesh2 = carMesh2[0]
   state.carMesh3 = carMesh3[0]
 
   # Also save road geometry
   var (_, roadVertices, roadIndices) = trackMesh1
-  var (_, barrierVertices, barrierIndices) = trackMesh2
+  var (_, barrierVertices, barrierIndices) = trackMesh5
   state.roadCollisionVertices = roadVertices
   state.roadCollisionIndices = roadIndices
   state.barrierCollisionVertices = barrierVertices
@@ -1054,7 +1054,7 @@ proc init() {.cdecl.} =
   # --- Setup camera & player ---
   state.player.position = vec3(0.0, 12, 25.0)
   state.player.velocity = vec3(0, 0, 0)
-  state.player.yaw = 90.0
+  state.player.yaw = 0.0
   state.player.angularVelocity = 0.0
   state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
 
@@ -1075,15 +1075,17 @@ proc computeVsParams(): shd.VsParams =
     u_mvp: proj * view * model,
     u_model: model,
     u_camPos: state.cameraPos,
-    u_jitterAmount: 240.0, # Simulate a 240p vertical resolution
+    #u_jitterAmount: 240.0, # Simulate a 240p vertical resolution
+    u_jitterAmount: sapp.heightf(), # Simulate a 240p vertical resolution
   )
 
 proc computeFsParams(): shd.FsParams =
   result = shd.FsParams(
     u_fogColor: vec3(0.25f, 0.5f, 0.75f),
     u_fogNear: 4.0f,
-    u_fogFar: 250.0f,
-    u_ditherSize: vec2(320.0, 240.0), # Should be equal to window size
+    u_fogFar: 150.0f,
+    #u_ditherSize: vec2(320.0, 240.0), # Should be equal to window size
+    u_ditherSize: vec2(sapp.widthf(), sapp.heightf()), # Should be equal to window size
     # -- AO uniforms --
     u_aoShadowStrength: state.aoShadowStrength,
     u_skyLightColor: state.skyLightColor,
@@ -1194,7 +1196,7 @@ proc checkBarrierCollisions(carPos: Vec3, carRotation: Mat4): CollisionResponse 
   ## Casts rays horizontally from the car to detect and respond to barrier collisions.
   const carWidth = 0.8  # Half the width of the car
   const carLength = 1.5 # Half the length of the car
-  const collisionRayLength = 1.5 # How far out to check for collisions
+  const collisionRayLength = 0.5 # How far out to check for collisions
 
   # Define the local-space origins for our collision rays
   # (front-right, front-left, back-right, back-left)
@@ -1234,6 +1236,7 @@ proc checkBarrierCollisions(carPos: Vec3, carRotation: Mat4): CollisionResponse 
           # 1. Calculate the normal of the wall we hit
           var wallNormal = norm(cross(v1 - v0, v2 - v0))
 
+          # Only if normals of barrier are not flipped in blender!
           # --- THIS IS THE CRUCIAL FIX ---
           # The normal should oppose the ray that hit it.
           # If the dot product is positive, it means the normal is pointing in a similar
@@ -1424,9 +1427,9 @@ proc frame() {.cdecl.} =
   sg.applyBindings(state.trackMesh3.bindings)
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
   sg.draw(0, state.trackMesh3.indexCount, 1)
-  sg.applyBindings(state.trackMesh4.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
-  sg.draw(0, state.trackMesh4.indexCount, 1)
+  #sg.applyBindings(state.trackMesh4.bindings)
+  #sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
+  #sg.draw(0, state.trackMesh4.indexCount, 1)
 
   # --- Draw car ---
   let carModel = translate(state.player.position) * state.player.rotation
@@ -1506,6 +1509,9 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
       state.input.turnRight = isDown
     of keyCodeSpace: # Drift
       state.input.drift = isDown
+    of keyCodeR: # Restart
+      state.player.position = vec3(0.0, 12, 25.0)
+      state.player.yaw = 0
     # -- AO realtime controlling --
     of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step); echo "Shadow Str: ", state.aoShadowStrength
     of keyCode2: state.aoShadowStrength += step; echo "Shadow Str: ", state.aoShadowStrength
@@ -1525,7 +1531,7 @@ sapp.run(sapp.Desc(
   windowTitle: "Game",
   width: 640,
   height: 480,
-  sampleCount: 4,
+  sampleCount: 0,
   icon: IconDesc(sokol_default: true),
   logger: sapp.Logger(fn: slog.fn)
 ))
