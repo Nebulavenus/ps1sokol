@@ -17,6 +17,7 @@ import std/random
 import std/strformat
 import audio
 import rtfs
+import nimprof
 
 # Declare your runtime file system.
 # This will always look for an 'assets' folder next to your .exe file.

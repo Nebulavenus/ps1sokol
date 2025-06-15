@@ -24,6 +24,11 @@ let shaders = [
     "default"
 ]
 
+let audios = [
+    "1", "2", "3",
+    "4", "5", "6"
+]
+
 proc compilerSwitch(): string =
   when defined(windows):
       return "--cc:vcc"
@@ -39,17 +44,43 @@ proc backendSwitch(): string =
 proc build() =
   exec &"nim c -d:release --outdir:build/ {compilerSwitch()} {backendSwitch()} src/main"
 
+proc buildProfile() =
+  exec &"nim c --profiler:on --stackTrace:on -d:release --outdir:build/ {compilerSwitch()} {backendSwitch()} src/main"
+
 proc buildDebug() =
   exec &"nim c -d:debug --debugger:native --outdir:build/ {compilerSwitch()} {backendSwitch()} src/main"
 
 # Tasks
 
-task convert, "Convert PNG to QOI":
+task convertPng, "Convert PNG to QOI":
     exec &"nim c --outdir:build/ src/converterqoi"
     exec &"build/converterqoi"
 
+task convertAudio, "Convert audio to QOA":
+  let binDir = "tools/goqoa/bin/"
+  let goqoaPath =
+    when defined(windows):
+      &"{binDir}win32/goqoa"
+    elif defined(macosx) and defined(arm64):
+      &"{binDir}osx_arm64/goqoa"
+    elif defined(macosx):
+      &"{binDir}osx/goqoa"
+    else:
+      &"{binDir}linux/goqoa"
+  for audio in audios:
+    # I hate this, lets rename all tracks to be digits..
+    #let cmd = fmt"""{goqoaPath} convert "\assets/music/{audio}.ogg"\ "\assets/music/{audio}.qoa"\"""
+    #let cmd = fmt"""{goqoaPath} convert \"assets/music/{audio}\".ogg \"assets/music/{audio}\".qoa"""
+    let cmd = fmt"""{goqoaPath} convert assets/music/{audio}.ogg assets/music/{audio}.qoa"""
+    echo &"   {cmd}"
+    exec cmd
+
 task debuggame, "Debug the game":
   buildDebug()
+  exec &"build/main"
+
+task profilegame, "Profile the game":
+  buildProfile()
   exec &"build/main"
 
 task game, "Runs the game":
