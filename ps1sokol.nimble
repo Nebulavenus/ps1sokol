@@ -3,7 +3,7 @@
 version       = "0.1.0"
 author        = "Nebula Venus"
 description   = "A new awesome nimble package"
-license       = "MIT"
+license       = "The Unlicense"
 srcDir        = "src"
 installExt    = @["nim"]
 bin           = @["main"]
