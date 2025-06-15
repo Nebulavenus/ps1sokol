@@ -37,6 +37,11 @@ const
   SCREECH_NOISE_MIX = 0.3        # How much white noise to mix with the high-freq tone (0.0 to 1.0)
 
 type
+  MusicTrack = object
+    name: string
+    pcmData: seq[int16]
+    channels: int
+
   AudioState = object
     oscillatorPhases: array[MAX_HARMONICS, float32] # Each harmonic needs its own phase
     screechPhase: float32
@@ -53,11 +58,11 @@ type
     lastOutputSample: float32
 
     # Music playback state
-    musicPcm: seq[int16]
-    musicPosition: int
+    playlist: seq[MusicTrack]
+    currentTrackIndex: int
+    musicPosition: int # Position within the current track
     musicPlaying: bool
     musicVolume: float32
-    musicChannels: int
 
 var audioState: AudioState
 var audioSamples: array[SAUDIO_NUM_SAMPLES, float32] # Buffer for samples
@@ -82,10 +87,11 @@ proc audioInit*() =
   audioState.lastOutputSample = 0.0
 
   # Init music state
+  audioState.playlist = @[]
+  audioState.currentTrackIndex = -1
   audioState.musicPlaying = false
   audioState.musicPosition = 0
   audioState.musicVolume = DEFAULT_MUSIC_VOLUME
-  audioState.musicChannels = 0
 
 proc audioShutdown*() =
   saudio.shutdown()
@@ -145,56 +151,80 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool) 
   audioState.currentScreechVolume = lerp(audioState.currentScreechVolume, targetScreechVolume, clamp(sapp.frameDuration() * smoothingSpeed, 0.0, 1.0))
   # --- END DRIFTING SCREECH VOLUME LOGIC ---
 
-proc loadMusic*(fs: rtfs.RuntimeFS, filename: string) =
-  let musicDataOpt = fs.get(filename)
-  if musicDataOpt.isNone:
-    echo(&"Could not load music file: {filename}")
-    return
+# --- NEW: Stateless decoder helper to avoid the closure-in-a-loop bug ---
+proc decodeQoaFromBytes(bytes: seq[byte]): Option[MusicTrack] =
+  var pos = 0
+  let readByte = proc(): int =
+    if pos >= bytes.len: return -1
+    result = bytes[pos].int
+    inc pos
+  let seekByte = proc(newPos: int) =
+    pos = clamp(newPos, 0, bytes.len)
 
-  # The QOA decoder needs proc closures that operate on a stream
-  var stream = newStringStream(musicDataOpt.get())
-  let readByteProc = proc(): int =
-    if stream.atEnd: return -1
-      #else: return stream.readByte().int
-    else: return stream.readUint8().int
-  let seekToByteProc = proc(pos: int) =
-    stream.setPosition(pos)
+  let decoder = newQOADecoder(readByte, seekByte)
 
-  let decoder = newQOADecoder(readByteProc, seekToByteProc)
+  if not decoder.readHeader() or decoder.getSampleRate() != SAUDIO_SAMPLE_RATE.int:
+    return none(MusicTrack)
 
-  if not decoder.readHeader():
-    echo(&"Failed to read QOA header for: {filename}")
-    stream.close()
-    return
-
-  audioState.musicChannels = decoder.getChannels()
-  let musicSampleRate = decoder.getSampleRate()
-  let totalSamples = decoder.getTotalSamples()
-
-  if musicSampleRate != SAUDIO_SAMPLE_RATE.int:
-    echo(&"Music sample rate ({musicSampleRate} Hz) does not match audio device rate ({SAUDIO_SAMPLE_RATE} Hz). This will cause pitch issues. Resampling is not implemented.")
-
-  audioState.musicPcm.setLen(totalSamples * audioState.musicChannels)
+  var track: MusicTrack
+  track.channels = decoder.getChannels()
+  track.pcmData.setLen(decoder.getTotalSamples * track.channels)
   var samplesRead = 0
-  while not decoder.isEnd():
-    let frameSamples = decoder.readFrame(audioState.musicPcm.toOpenArray(
-      samplesRead * audioState.musicChannels,
-      audioState.musicPcm.len - 1
-    ))
-    if frameSamples < 0:
-      echo("Error decoding QOA frame for: {filename}")
-      stream.close()
-      return
+  while not decoder.isEnd:
+    let frameSamples = decoder.readFrame(track.pcmData.toOpenArray(samplesRead * track.channels, track.pcmData.len - 1))
+    if frameSamples < 0: return none(MusicTrack)
     samplesRead += frameSamples
 
-  stream.close()
+  if samplesRead > 0: return some(track)
+  return none(MusicTrack)
 
-  if samplesRead > 0:
-    audioState.musicPlaying = true
-    audioState.musicPosition = 0
-    echo("Successfully loaded music: {filename} ({totalSamples} samples, {audioState.musicChannels} channels)")
-  else:
-    echo("Music file '{filename}' loaded but contains no samples.")
+proc loadPlaylist*(fs: rtfs.RuntimeFS, directory: string) =
+  echo(&"Loading playlist from: {directory}")
+  for file in fs.listDir(directory):
+    if file.endsWith(".qoa"):
+      let fullPath = directory & "/" & file
+      let musicDataOpt = fs.get(fullPath)
+      if musicDataOpt.isSome:
+        var trackOpt = decodeQoaFromBytes(cast[seq[byte]](musicDataOpt.get()))
+        if trackOpt.isSome:
+          var track = trackOpt.get
+          track.name = fullPath # Store the name for logging
+          audioState.playlist.add(track)
+        else:
+          echo(&"Failed to decode QOA file: {fullPath}")
+      else:
+        echo(&"Could not read file from FS: {fullPath}")
+
+  if audioState.playlist.len == 0:
+    echo("No valid music tracks found.")
+    return
+
+  randomize(); audioState.playlist.shuffle()
+  audioState.currentTrackIndex = 0
+  audioState.musicPlaying = true
+  echo(&"Playlist loaded with {audioState.playlist.len} tracks.")
+  if audioState.playlist[0].pcmData.len > 0:
+    echo(&"Now playing: {audioState.playlist[0].name}")
+
+# --- NEW: State management function, called only when needed ---
+proc switchToNextTrack() =
+  if not audioState.musicPlaying or audioState.playlist.len == 0: return
+
+  var foundNext = false
+  # Start search from the track *after* the current one.
+  let startIndex = if audioState.currentTrackIndex == -1: 0 else: audioState.currentTrackIndex
+  for i in 0 ..< audioState.playlist.len:
+    let nextIndex = (startIndex + i + 1) mod audioState.playlist.len
+    if audioState.playlist[nextIndex].pcmData.len > 0:
+      audioState.currentTrackIndex = nextIndex
+      audioState.musicPosition = 0
+      #echo(&"Now playing: {audioState.playlist[nextIndex].name}")
+      foundNext = true
+      break
+
+  if not foundNext:
+    audioState.musicPlaying = false
+    #echo("No more valid tracks in playlist. Stopping music.")
 
 proc audioGenerateSamples*() =
   let expectedFrames = saudio.expect()
@@ -202,10 +232,26 @@ proc audioGenerateSamples*() =
 
   let framesToGenerate = min(expectedFrames, SAUDIO_NUM_SAMPLES)
 
+  # --- 1. STATE MANAGEMENT (runs ONCE per callback) ---
+  if audioState.musicPlaying and audioState.playlist.len > 0:
+      if audioState.currentTrackIndex == -1:
+        switchToNextTrack()
+      elif audioState.musicPosition >= audioState.playlist[audioState.currentTrackIndex].pcmData.len:
+        switchToNextTrack()
+
+  # --- 2. HOIST LOOKUPS (runs ONCE per callback) ---
+  # Get a direct reference to the PCM data *before* the hot loop. This is the critical fix.
+  var currentPcm: seq[int16]
+  var currentNumChannels = 0
+  if audioState.musicPlaying and audioState.currentTrackIndex != -1:
+    let track = audioState.playlist[audioState.currentTrackIndex]
+    currentPcm = track.pcmData
+    currentNumChannels = track.channels
   # --- DYNAMIC LOW-PASS FILTER SETUP for engine ---
   let rpmNormalized = clamp((audioState.currentRpm - 1000.0) / (6000.0 - 1000.0), 0.0, 1.0)
   let filterCutoff = lerp(0.1, 0.8, rpmNormalized)
 
+  # --- 3. GENERATE SAMPLES (The main loop) ---
   for i in 0..<framesToGenerate:
     # --- 1. Generate Engine Sample ---
     var engineSample: float32 = 0.0
@@ -240,21 +286,17 @@ proc audioGenerateSamples*() =
     # --- 2. Generate Music Sample ---
     var musicSample: float32 = 0.0
     block generateMusic:
-      if audioState.musicPlaying and audioState.musicPcm.len > 0:
-        let pcmLen = audioState.musicPcm.len
-        if audioState.musicChannels == 1: # Mono
-          musicSample = float32(audioState.musicPcm[audioState.musicPosition]) / 32767.0
-          audioState.musicPosition = (audioState.musicPosition + 1)
-        elif audioState.musicChannels >= 2: # Stereo or more, mix to mono
-          let left = float32(audioState.musicPcm[audioState.musicPosition]) / 32767.0
-          let right = float32(audioState.musicPcm[audioState.musicPosition + 1]) / 32767.0
-          musicSample = (left + right) * 0.5 # Simple mono mixdown
-          audioState.musicPosition += audioState.musicChannels
-
-        # Loop music
-        if audioState.musicPosition >= pcmLen:
-          audioState.musicPosition = 0
-
+      # Use the 'cached' direct reference inside the loop for maximum performance.
+      if currentPcm.len > 0 and audioState.musicPosition < currentPcm.len:
+        if currentNumChannels == 1:
+          musicSample = float32(currentPcm[audioState.musicPosition]) / 32767.0
+          inc audioState.musicPosition
+        else: # Stereo mixdown
+          if audioState.musicPosition + 1 < currentPcm.len:
+            let left = float32(currentPcm[audioState.musicPosition]) / 32767.0
+            let right = float32(currentPcm[audioState.musicPosition+1]) / 32767.0
+            musicSample = (left + right) * 0.5
+          inc(audioState.musicPosition, currentNumChannels)
         musicSample *= audioState.musicVolume
 
     # --- 3. Mix and Clamp ---
