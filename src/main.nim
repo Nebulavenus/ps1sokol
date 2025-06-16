@@ -710,14 +710,15 @@ proc loadPly(fileLines: seq[string]): (seq[Vertex], seq[uint16]) =
 
 # --- Caching and mesh processing procedures ---
 proc saveMeshToCache(fs: RuntimeFS, path: string, vertices: seq[Vertex], indices: seq[uint16]) =
-  ## Saves the processed vertex and index data to a fast binary cache file
+  ## Saves the processed vertex and index data to a fast binary cache file.
+  ## USES FIXED-SIZE int32 for platform compatibility.
   echo "Saving baked mesh to cache: ", path
   var stream = newStringStream()
 
   try:
-    # Write a simple header: vertex count and index count
-    stream.write(vertices.len)
-    stream.write(indices.len)
+    # Write a platform-independent header: vertex count and index count as int32.
+    stream.write(vertices.len.int32)
+    stream.write(indices.len.int32)
     # Write the raw data blobs
     stream.writeData(vertices[0].addr, vertices.len * sizeof(Vertex))
     stream.writeData(indices[0].addr, indices.len * sizeof(uint16))
@@ -729,6 +730,7 @@ proc saveMeshToCache(fs: RuntimeFS, path: string, vertices: seq[Vertex], indices
 
 proc loadMeshFromCache(fs: RuntimeFS, path: string): (seq[Vertex], seq[uint16]) =
   ## Loads vertex and index data from a binary cache file.
+  ## READS FIXED-SIZE int32 for platform compatibility.
   echo "Loading baked mesh from cache: ", path
   let contentOpt = fs.get(path)
   if contentOpt.isNone:
@@ -741,12 +743,14 @@ proc loadMeshFromCache(fs: RuntimeFS, path: string): (seq[Vertex], seq[uint16]) 
   var indices: seq[uint16]
 
   try:
-    var vertCount, idxCount: int
+    # Read the platform-independent header as int32.
+    var vertCount, idxCount: int32
     stream.read(vertCount)
     stream.read(idxCount)
 
-    vertices.setLen(vertCount)
-    indices.setLen(idxCount)
+    # Convert to platform's `int` size for setLen.
+    vertices.setLen(vertCount.int)
+    indices.setLen(idxCount.int)
 
     discard stream.readData(vertices[0].addr, vertCount * sizeof(Vertex))
     discard stream.readData(indices[0].addr, idxCount * sizeof(uint16))
@@ -953,12 +957,8 @@ proc init() {.cdecl.} =
     fonts: [ sdtx.fontKc853() ]
   ))
 
-  # Load the entire music
-  loadMusic(ASSETS_FS, "music/sunset_relay.qoa")
-
   case sg.queryBackend():
-    of backendGles3: echo "using GLES3 backend"
-    of backendGlcore: echo "using GLCORE43 backend"
+    of backendGlcore: echo "using GLCORE33 backend"
     of backendD3d11: echo "using D3D11 backend"
     of backendMetalMacos: echo "using Metal backend"
     else: echo "using untested backend"
@@ -1001,11 +1001,6 @@ proc init() {.cdecl.} =
     )
   ))
 
-  # Load mesh & also preprocessing if needed
-  let assetDir = getAppDir() & DirSep
-  let trackPath = assetDir & "track.ply"
-  let carPath = assetDir & "car.ply"
-
   # Define AO parameters
   let aoParams = AOBakeParams(
     numRays: 64,
@@ -1025,6 +1020,9 @@ proc init() {.cdecl.} =
     minFilter: filterNearest,
     magFilter: filterNearest,
   ));
+
+  # Load the entire music
+  loadMusic(ASSETS_FS, "music/sunset_relay.qoa")
 
   # Load the meshes. One function handles everything
   let trackTexture1 = loadTexture(ASSETS_FS, "map2"/"track_road.qoi")

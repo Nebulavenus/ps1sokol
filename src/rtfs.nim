@@ -1,6 +1,7 @@
-## rtfs.nim - A simple runtime filesystem for game assets
+# rtfs.nim - A simple runtime filesystem for game assets
 import std/os
 import std/strutils
+import std/strformat
 import std/options; export options
 
 type
@@ -18,12 +19,11 @@ proc newRuntimeFS*(relativeRoot: string): RuntimeFS =
     # For desktop builds, the path is relative to the executable.
     result.rootPath = getAppDir() / relativeRoot
 
-  echo "[rtfs] Initialized with root: " & result.rootPath
+  echo(&"[rtfs] Initialized with root: {result.rootPath}")
 
-  # Directory existence check is not reliable or necessary for Emscripten's virtual FS.
   when not defined(emscripten):
     if not dirExists(result.rootPath):
-      echo "[rtfs] Warning: Root directory does not exist, creating: " & result.rootPath
+      echo(&"[rtfs] Warning: Root directory does not exist, creating: {result.rootPath}")
       createDir(result.rootPath)
 
 func looksAbsolute(path: string): bool =
@@ -38,12 +38,10 @@ proc getPath*(fs: RuntimeFS, filename: string): Option[string] =
   let targetPath = fs.rootPath / filename
 
   when defined(emscripten):
-    # On Emscripten, all paths are virtual and relative to the root '/'
-    # so we don't need the isRelativeTo check.
     return some(targetPath)
   else:
     if looksAbsolute(filename) or not targetPath.isRelativeTo(fs.rootPath):
-      echo "[rtfs] Access denied to path outside root: " & filename
+      echo(&"[rtfs] Access denied to path outside root: {filename}")
       return none(string)
     return some(targetPath)
 
@@ -55,13 +53,17 @@ proc get*(fs: RuntimeFS, filename: string): Option[string] =
   let targetPath = targetPathOpt.get()
   if fileExists(targetPath):
     try:
-      return some(readFile(targetPath))
+      let content = readFile(targetPath)
+      # --- SUCCESS LOG ---
+      echo(&"[rtfs] Successfully loaded: {targetPath} ({content.len} bytes)")
+      return some(content)
     except CatchableError as e:
-      echo "[rtfs] Error reading file '", targetPath, "': ", e.msg
+      # --- ERROR LOG ---
+      echo(&"[rtfs] Error reading file '{targetPath}': {e.msg}")
       return none(string)
   else:
-    # On Emscripten, this is the most likely place you'll see a failure.
-    echo "[rtfs] File not found: ", targetPath
+    # --- NOT FOUND LOG ---
+    echo(&"[rtfs] File not found: {targetPath}")
     return none(string)
 
 proc write*(fs: RuntimeFS, filename: string, content: string | seq[byte]) =
@@ -69,7 +71,7 @@ proc write*(fs: RuntimeFS, filename: string, content: string | seq[byte]) =
   when not defined(emscripten):
     let targetPathOpt = fs.getPath(filename)
     if targetPathOpt.isNone:
-      echo "[rtfs] Cannot write file, invalid path: " & filename
+      echo(&"[rtfs] Cannot write file, invalid path: {filename}")
       return
 
     let targetPath = targetPathOpt.get()
@@ -78,19 +80,21 @@ proc write*(fs: RuntimeFS, filename: string, content: string | seq[byte]) =
       if not dirExists(parentDir):
         createDir(parentDir)
       writeFile(targetPath, content)
-      echo "[rtfs] Wrote file: " & targetPath
+      echo(&"[rtfs] Wrote file: {targetPath}")
     except CatchableError as e:
-      echo "[rtfs] Error writing file '", targetPath, "': ", e.msg
+      echo(&"[rtfs] Error writing file '{targetPath}': {e.msg}")
   else:
-    # Writing is not supported to the preloaded filesystem.
-    echo "[rtfs] Warning: Attempted to write file '", filename, "' in Emscripten build. Operation skipped."
+    echo(&"[rtfs] Warning: Write operation skipped in Emscripten build for file: {filename}")
 
 
 proc fileExists*(fs: RuntimeFS, filename: string): bool =
   ## Checks if a file exists within the filesystem.
   let targetPathOpt = fs.getPath(filename)
   if targetPathOpt.isNone: return false
-  return os.fileExists(targetPathOpt.get())
+  let exists = os.fileExists(targetPathOpt.get())
+  # --- FILEEXISTS LOG ---
+  echo(&"[rtfs] Checking exists '{targetPathOpt.get()}': {exists}")
+  return exists
 
 iterator walk*(fs: RuntimeFS): string =
   ## Lists all file names relative to the root, recursively.
@@ -101,9 +105,10 @@ iterator listDir*(fs: RuntimeFS, subdir = ""): string =
   ## Lists files and directories in a subdirectory relative to the root.
   let targetPathOpt = fs.getPath(subdir)
   if targetPathOpt.isNone:
-    echo "Not found"
+    echo "Not found targetPath listDir"
 
   let targetDir = targetPathOpt.get()
+  echo(&"[rtfs] Listing directory: {targetDir}")
   if dirExists(targetDir):
     for item in walkDir(targetDir):
       yield item.path.relativePath(targetDir)

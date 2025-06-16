@@ -182,7 +182,7 @@ proc loadMusic*(fs: rtfs.RuntimeFS, filename: string) =
       audioState.musicPcm.len - 1
     ))
     if frameSamples < 0:
-      echo("Error decoding QOA frame for: {filename}")
+      echo(&"Error decoding QOA frame for: {filename}")
       stream.close()
       return
     samplesRead += frameSamples
@@ -192,9 +192,9 @@ proc loadMusic*(fs: rtfs.RuntimeFS, filename: string) =
   if samplesRead > 0:
     audioState.musicPlaying = true
     audioState.musicPosition = 0
-    echo("Successfully loaded music: {filename} ({totalSamples} samples, {audioState.musicChannels} channels)")
+    echo(&"Successfully loaded music: {filename} ({totalSamples} samples, {audioState.musicChannels} channels)")
   else:
-    echo("Music file '{filename}' loaded but contains no samples.")
+    echo(&"Music file '{filename}' loaded but contains no samples.")
 
 proc audioGenerateSamples*() =
   let expectedFrames = saudio.expect()
