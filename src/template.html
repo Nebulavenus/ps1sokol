@@ -3,68 +3,50 @@
     <head>
         <meta charset="utf-8" />
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-        <title>Emscripten-Generated Code</title>
+        <!-- Set a proper title for your game -->
+        <title>PS1 Style Arcade Racer</title>
         <style>
-            .emscripten {
-                padding-right: 0;
-                margin-left: auto;
-                margin-right: auto;
-                display: block;
+            /* Basic resets and body styling */
+            html,
+            body {
+                height: 100%;
+                margin: 0;
+                padding: 0;
+                overflow: hidden; /* Prevents scrollbars */
+                background-color: #222; /* A nice dark background */
+                color: #ccc;
+                font-family: sans-serif;
             }
-            textarea.emscripten {
-                font-family: monospace;
-                width: 80%;
+            body {
+                /* Center all content vertically and horizontally */
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
             }
-            div.emscripten {
-                text-align: center;
-            }
-            div.emscripten_border {
-                border: 1px solid black;
-            }
-            /* the canvas *must not* have any border or padding, or mouse coords will be wrong */
+
+            /* The canvas must not have any border or padding, or mouse coords will be wrong */
             canvas.emscripten {
                 border: 0px none;
+                /* The canvas background isn't really seen, but good to have */
                 background-color: black;
             }
 
+            /* Loading elements container */
+            #loader {
+                text-align: center;
+                position: absolute; /* Position over the canvas while loading */
+            }
+
+            /* Spinner animation for loading */
             .spinner {
-                height: 50px;
-                width: 50px;
-                margin: 0px auto;
-                -webkit-animation: rotation 0.8s linear infinite;
-                -moz-animation: rotation 0.8s linear infinite;
-                -o-animation: rotation 0.8s linear infinite;
+                height: 40px;
+                width: 40px;
+                margin: 0 auto 1em auto;
                 animation: rotation 0.8s linear infinite;
-                border-left: 10px solid rgb(0, 150, 240);
-                border-right: 10px solid rgb(0, 150, 240);
-                border-bottom: 10px solid rgb(0, 150, 240);
-                border-top: 10px solid rgb(100, 0, 200);
+                border: 8px solid rgba(0, 150, 240, 0.2);
+                border-top-color: rgb(0, 150, 240);
                 border-radius: 100%;
-                background-color: rgb(200, 100, 250);
-            }
-            @-webkit-keyframes rotation {
-                from {
-                    -webkit-transform: rotate(0deg);
-                }
-                to {
-                    -webkit-transform: rotate(360deg);
-                }
-            }
-            @-moz-keyframes rotation {
-                from {
-                    -moz-transform: rotate(0deg);
-                }
-                to {
-                    -moz-transform: rotate(360deg);
-                }
-            }
-            @-o-keyframes rotation {
-                from {
-                    -o-transform: rotate(0deg);
-                }
-                to {
-                    -o-transform: rotate(360deg);
-                }
             }
             @keyframes rotation {
                 from {
@@ -77,52 +59,38 @@
         </style>
     </head>
     <body>
-        <hr />
-        <figure style="overflow: visible" id="spinner">
+        <!-- This div holds the loading UI -->
+        <div id="loader">
             <div class="spinner"></div>
-            <center style="margin-top: 0.5em">
-                <strong>emscripten</strong>
-            </center>
-        </figure>
-        <div class="emscripten" id="status">Downloading...</div>
-        <div class="emscripten">
-            <progress value="0" max="100" id="progress" hidden="1"></progress>
-        </div>
-        <div class="emscripten_border">
-            <canvas
-                class="emscripten"
-                id="canvas"
-                oncontextmenu="event.preventDefault()"
-                tabindex="-1"
-            ></canvas>
-        </div>
-        <hr />
-        <div class="emscripten">
-            <input type="checkbox" id="resize" />Resize canvas
-            <input type="checkbox" id="pointerLock" checked />Lock/hide mouse
-            pointer &nbsp;&nbsp;&nbsp;
-            <input
-                type="button"
-                value="Fullscreen"
-                onclick="Module.requestFullscreen(document.getElementById('pointerLock').checked,
-                                                                                document.getElementById('resize').checked)"
-            />
+            <div id="status">Downloading...</div>
+            <progress
+                value="0"
+                max="100"
+                id="progress"
+                hidden="1"
+                style="width: 100%"
+            ></progress>
         </div>
 
-        <hr />
-        <textarea class="emscripten" id="output" rows="8"></textarea>
-        <hr />
+        <!-- The main canvas for your game. It's hidden until the game is ready. -->
+        <canvas
+            class="emscripten"
+            id="canvas"
+            oncontextmenu="event.preventDefault()"
+            tabindex="-1"
+            hidden
+        ></canvas>
+
         <script type="text/javascript">
-            var statusElement = document.getElementById("status");
-            var progressElement = document.getElementById("progress");
-            var spinnerElement = document.getElementById("spinner");
-            var canvasElement = document.getElementById("canvas");
-            var outputElement = document.getElementById("output");
-            if (outputElement) outputElement.value = ""; // clear browser cache
+            const statusElement = document.getElementById("status");
+            const progressElement = document.getElementById("progress");
+            const loaderElement = document.getElementById("loader");
+            const canvasElement = document.getElementById("canvas");
 
-            // As a default initial behavior, pop up an alert when webgl context is lost. To make your
-            // application robust, you may want to override this behavior before shipping!
-            // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
+            // Set fixed canvas size
+            canvasElement.width = 640;
+            canvasElement.height = 480;
+
             canvasElement.addEventListener(
                 "webglcontextlost",
                 (e) => {
@@ -135,42 +103,28 @@
             );
 
             var Module = {
-                print(...args) {
-                    // These replacements are necessary if you render to raw HTML
-                    //text = text.replace(/&/g, "&amp;");
-                    //text = text.replace(/</g, "&lt;");
-                    //text = text.replace(/>/g, "&gt;");
-                    //text = text.replace('\n', '<br>', 'g');
-                    console.log(...args);
-                    if (outputElement) {
-                        var text = args.join(" ");
-                        outputElement.value += text + "\n";
-                        outputElement.scrollTop = outputElement.scrollHeight; // focus on bottom
-                    }
-                },
+                // We only print to the console now, not a textarea
+                print: (...args) => console.log(...args),
+                printErr: (...args) => console.error(...args),
+
                 canvas: canvasElement,
+
                 setStatus(text) {
-                    Module.setStatus.last ??= { time: Date.now(), text: "" };
+                    if (!Module.setStatus.last)
+                        Module.setStatus.last = { time: Date.now(), text: "" };
                     if (text === Module.setStatus.last.text) return;
-                    var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
-                    var now = Date.now();
-                    if (m && now - Module.setStatus.last.time < 30) return; // if this is a progress update, skip it if too soon
-                    Module.setStatus.last.time = now;
-                    Module.setStatus.last.text = text;
+
+                    const m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
                     if (m) {
-                        text = m[1];
                         progressElement.value = parseInt(m[2]) * 100;
                         progressElement.max = parseInt(m[4]) * 100;
                         progressElement.hidden = false;
-                        spinnerElement.hidden = false;
                     } else {
-                        progressElement.value = null;
-                        progressElement.max = null;
                         progressElement.hidden = true;
-                        if (!text) spinnerElement.hidden = true;
                     }
                     statusElement.innerHTML = text;
                 },
+
                 totalDependencies: 0,
                 monitorRunDependencies(left) {
                     this.totalDependencies = Math.max(
@@ -179,22 +133,25 @@
                     );
                     Module.setStatus(
                         left
-                            ? "Preparing... (" +
-                                  (this.totalDependencies - left) +
-                                  "/" +
-                                  this.totalDependencies +
-                                  ")"
+                            ? `Preparing... (${this.totalDependencies - left}/${this.totalDependencies})`
                             : "All downloads complete.",
                     );
                 },
+
+                // This function is called when the Emscripten runtime is ready
+                onRuntimeInitialized() {
+                    // Hide the loader and show the canvas
+                    loaderElement.hidden = true;
+                    canvasElement.hidden = false;
+                },
             };
+
             Module.setStatus("Downloading...");
+
             window.onerror = () => {
                 Module.setStatus("Exception thrown, see JavaScript console");
-                spinnerElement.style.display = "none";
-                Module.setStatus = (text) => {
-                    if (text) console.error("[post-exception status] " + text);
-                };
+                loaderElement.innerHTML =
+                    "<strong>Error: See JavaScript console for details.</strong>";
             };
         </script>
         {{{ SCRIPT }}}
