@@ -957,7 +957,8 @@ proc init() {.cdecl.} =
   loadMusic(ASSETS_FS, "music/sunset_relay.qoa")
 
   case sg.queryBackend():
-    of backendGlcore: echo "using GLCORE33 backend"
+    of backendGles3: echo "using GLES3 backend"
+    of backendGlcore: echo "using GLCORE43 backend"
     of backendD3d11: echo "using D3D11 backend"
     of backendMetalMacos: echo "using Metal backend"
     else: echo "using untested backend"

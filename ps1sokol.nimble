@@ -31,7 +31,9 @@ let audios = [
 
 proc compilerSwitch(): string =
   when defined(windows):
-      return "--cc:vcc"
+      #return "--cc:vcc"
+      # Disable microsoft compiler, compile instead with nim's gcc
+      return ""
   else:
       return ""
 
