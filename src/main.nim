@@ -18,6 +18,9 @@ import std/strformat
 import audio
 import rtfs
 
+when defined(emscripten):
+  proc emscripten_run_script(script: cstring) {.importc, header: "<emscripten/emscripten.h>".}
+
 when defined(profiler):
   import nimprof
 
@@ -1523,6 +1526,11 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
   if e.`type` == EventType.eventTypeMouseDown:
     if not state.gameHasFocus:
       state.gameHasFocus = true
+      when defined(emscripten):
+        # We explicitly tell the browser to focus the canvas.
+        # This ensures keyboard events are captured.
+        # The default ID for the Emscripten canvas is 'canvas'.
+        emscripten_run_script("document.getElementById('canvas').focus();")
 
   # Mouse
   if e.`type` == EventType.eventTypeMouseScroll:
