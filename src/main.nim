@@ -918,8 +918,10 @@ type State = object
   cameraOffsetY: float32
   cameraPos: Vec3 # Camera's actual world position
   cameraTarget: Vec3 # Point the camera is looking at
+  # From audio.nim calculated values
   debugSpeed: float32
-  debugAcceleration: float32
+  debugRpm: float32
+  debugGear: int32
   # Rendering
   vsParams: VsParams
   fsParams: FsParams
@@ -1276,8 +1278,8 @@ proc frame() {.cdecl.} =
     const engineForce = 25.0    # How much power the engine has
     const brakeForce = 20.0    # How powerful the brakes are
     const drag = 0.8            # Air resistance, slows down at high speed
-    const angularDrag = 2.5     # Stops the car from spinning forever
-    const baseGrip = 1.8        # Base grip strength
+    const angularDrag = 1.1     # Stops the car from spinning forever
+    const baseGrip = 0.95        # Base grip strength
     const driftGripMultiplier = 0.3 # How much grip is reduced when drifting
     const driftTurningMultiplier = 2.2 # How much more torque you get when drifting
 
@@ -1359,10 +1361,7 @@ proc frame() {.cdecl.} =
     let currentSpeed = len(state.player.velocity)
     # --- Calculate Speed and Acceleration for Audio ---
     let carAccel = (currentSpeed - len(prevVelocity)) / dt
-    updateEngineSound(currentSpeed, carAccel, state.input.drift)
-    # For ui debug
-    state.debugSpeed = currentSpeed
-    state.debugAcceleration = carAccel
+    updateEngineSound(currentSpeed, carAccel, state.input.drift, state.debugSpeed, state.debugRpm, state.debugGear)
 
     # Drifting
     var currentGrip = baseGrip
@@ -1472,7 +1471,8 @@ proc frame() {.cdecl.} =
 
   # Use strformat to create the formatted strings and convert to C-string for sdtx
   sdtx.puts((&"Speed: {state.debugSpeed:5.2f}\n").cstring)
-  sdtx.puts((&"Accel: {state.debugAcceleration:5.2f}\n").cstring)
+  sdtx.puts((&"RPM: {state.debugRpm.int32}\n").cstring)
+  sdtx.puts((&"Gear: {state.debugGear}\n").cstring)
 
   # Draw the text buffer to the screen
   sdtx.draw()
