@@ -896,6 +896,9 @@ type InputState = object
   drift: bool
 
 type State = object
+  # App
+  gameHasFocus: bool
+  # Rendering
   pip: Pipeline
   passAction: sg.PassAction
   # Track meshes
@@ -948,6 +951,9 @@ const
 proc init() {.cdecl.} =
   # Initialize the runtime filesystem first thing.
   ASSETS_FS = newRuntimeFS("assets")
+
+  # Assume focus on desktop, require it for web
+  state.gameHasFocus = not defined(emscripten)
 
   sg.setup(sg.Desc(
     environment: sglue.environment(),
@@ -1272,6 +1278,19 @@ proc frame() {.cdecl.} =
   #let dt = sapp.frameDuration() * 60f
   let dt = sapp.frameDuration()
 
+  # --- WRAP THE ENTIRE LOGIC AND RENDERING IN A FOCUS CHECK ---
+  if not state.gameHasFocus:
+    # If the game doesn't have focus, just clear the screen and draw a prompt
+    sg.beginPass(Pass(action: passAction, swapchain: sglue.swapchain()))
+    sdtx.canvas(sapp.widthf()*0.5, sapp.heightf()*0.5)
+    sdtx.origin(2.0, 2.0)
+    sdtx.color3f(1.0, 1.0, 1.0)
+    sdtx.puts("CLICK TO PLAY")
+    sdtx.draw()
+    sg.endPass()
+    sg.commit()
+    return # Stop further processing for this frame
+
   # --- Logic ---
   block VehiclePhysics:
     # --- Constants to Tweak ---
@@ -1491,18 +1510,14 @@ proc cleanup() {.cdecl.} =
   sg.shutdown()
 
 proc event(e: ptr sapp.Event) {.cdecl.} =
-  # Mouse
-  #[
-  if e.`type` == EventType.eventTypeMouseMove:
-    let mouseSensitivity = 0.005 # Adjust this value to your liking
-    state.camYaw   += e.mouseDx * mouseSensitivity
-    state.camPitch -= e.mouseDy * mouseSensitivity # Subtract because positive dy is mouse down
+  # Focus for app
+  # Handle window focus events, crucial for Emscripten
+  if e.`type` == EventType.eventTypeFocused:
+    state.gameHasFocus = true
+  elif e.`type` == EventType.eventTypeUnfocused:
+    state.gameHasFocus = false
 
-    # Clamp pitch to prevent the camera from flipping over
-    const pitchLimit = 1.55 # ~89 degrees in radians
-    if state.camPitch > pitchLimit: state.camPitch = pitchLimit
-    if state.camPitch < -pitchLimit: state.camPitch = -pitchLimit
-  ]#
+  # Mouse
   if e.`type` == EventType.eventTypeMouseScroll:
     state.cameraOffsetY += e.scrollY * 0.5
     state.cameraOffsetY = max(state.cameraOffsetY, 0.0)
