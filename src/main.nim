@@ -1285,8 +1285,8 @@ proc frame() {.cdecl.} =
 
     # --- NEW, IMPROVED TURNING CONSTANTS ---
     # Torque is now determined by speed for better control.
-    const lowSpeedTurnTorque = 120.0    # High torque for sharp turns at low speed
-    const highSpeedTurnTorque = 60.0   # Lower torque for stability at high speed
+    const lowSpeedTurnTorque = 100.0    # High torque for sharp turns at low speed
+    const highSpeedTurnTorque = 40.0   # Lower torque for stability at high speed
     const speedForMaxTurnDampening = 40.0 # The speed at which turning is most dampened (reduced)
 
     # Store previous velocity to calculate acceleration later
@@ -1327,7 +1327,11 @@ proc frame() {.cdecl.} =
     # --- END NEW TURNING PHYSICS ---
 
     # 1. Apply Drag/Friction
-    state.player.velocity = state.player.velocity * (1.0 - (drag * dt))
+    var currentDrag = drag
+    if state.input.drift:
+      # When drifting apply slowdown
+      currentDrag *= 1.5
+    state.player.velocity = state.player.velocity * (1.0 - (currentDrag * dt))
     state.player.angularVelocity = state.player.angularVelocity * (1.0 - (angularDrag * dt))
 
     # 2. Update Rotation and Position from Velocities
@@ -1375,11 +1379,11 @@ proc frame() {.cdecl.} =
     let newVelocityDir = norm(lerpV(velocityDirection, forwardDir, clamp(currentGrip * dt, 0.0, 1.0)))
 
     if currentSpeed > 0.01: # Avoid issues with normalizing a zero vector when assigning
-        state.player.velocity = newVelocityDir * currentSpeed
+      state.player.velocity = newVelocityDir * currentSpeed
     else:
-        # If speed is zero, ensure velocity stays zero or aligns without movement.
-        # This prevents tiny residual velocities from causing issues when stopped.
-        state.player.velocity = vec3(0,0,0)
+      # If speed is zero, ensure velocity stays zero or aligns without movement.
+      # This prevents tiny residual velocities from causing issues when stopped.
+      state.player.velocity = vec3(0,0,0)
 
     # 4. Align Car's Visual Rotation to the Surface
     # We need to construct a new rotation matrix that respects the yaw from player input

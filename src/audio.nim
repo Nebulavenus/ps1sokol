@@ -17,14 +17,14 @@ const
   # --- Engine Sound Parameters ---
   MAX_HARMONICS = 3              # Number of harmonic oscillators
   # Multipliers for each harmonic (e.g., 1st, 2nd, 3rd multiples of fundamental)
-  HARMONIC_FREQS = [1.0, 1.5, 2.5]
+  HARMONIC_FREQS = [1.0, 1.5, 2.0]
 
   # Base volume for each harmonic at low RPM (idle)
   # Tune these to shape the idle sound
-  HARMONIC_LEVELS_LOW_RPM = [0.8, 0.3, 0.1]
+  HARMONIC_LEVELS_LOW_RPM = [0.9, 0.4, 0.2]
   # Base volume for each harmonic at high RPM (revving)
   # Tune these to shape the high-rev sound
-  HARMONIC_LEVELS_HIGH_RPM = [0.7, 0.4, 0.2]
+  HARMONIC_LEVELS_HIGH_RPM = [0.7, 0.5, 0.3]
 
   # --- Gear Shifting Parameters ---
   GAME_MAX_SPEED = 35.0          # Estimated max speed of the car for normalization
@@ -38,12 +38,12 @@ const
 
   # --- New Drift Sound Parameters ---
   DRIFT_RPM_BOOST = 600.0        # How much RPM boosts when drifting
-  MAX_SCREECH_VOLUME = 0.6       # INCREASE THIS: Max volume of the tire screech (try 0.8 or 1.0)
+  MAX_SCREECH_VOLUME = 0.9       # INCREASE THIS: Max volume of the tire screech (try 0.8 or 1.0)
   SCREECH_ATTACK_SPEED = 15.0    # INCREASE THIS: How fast screech volume ramps up (make it punchier)
   SCREECH_DECAY_SPEED = 8.0      # INCREASE THIS: How fast screech volume ramps down (so it lingers a bit)
 
-  SCREECH_BASE_FREQ = 1200.0     # Base frequency of the screech sound (e.g., 1200 Hz)
-  SCREECH_FREQ_JITTER = 200.0    # How much the screech frequency can randomly vary
+  SCREECH_BASE_FREQ = 800.0     # Base frequency of the screech sound (e.g., 1200 Hz)
+  SCREECH_FREQ_JITTER = 500.0    # How much the screech frequency can randomly vary
   SCREECH_NOISE_MIX = 0.3        # How much white noise to mix with the high-freq tone (0.0 to 1.0)
 
 type
@@ -148,7 +148,7 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool, 
   var baseTargetRpm = minRpm + (UPSHIFT_RPM - minRpm) * speedInGearNormalized
 
   # Optional: Log the values to debug
-  echo(&"SpeedNorm: {speedInGearNormalized:3.2f} BaseRPM: {baseTargetRpm:5.1f} Vel: {carSpeed:3.1f} - Gear: {currentGear}")
+  #echo(&"SpeedNorm: {speedInGearNormalized:3.2f} BaseRPM: {baseTargetRpm:5.1f} Vel: {carSpeed:3.1f} - Gear: {currentGear}")
   # Temporary here for debug ui
   debugSpeed = carSpeed
   debugRpm = baseTargetRpm
@@ -163,7 +163,7 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool, 
   audioState.currentRpm = lerp(audioState.currentRpm, audioState.targetRpm, clamp(sapp.frameDuration() * rpmSmoothingFactor, 0.0, 1.0))
 
   # Convert RPM to a base frequency (fundamental)
-  const freqPerRpm = 0.025 # Tune this to get desired pitch range
+  const freqPerRpm = 0.028 # Tune this to get desired pitch range
   audioState.engineFrequency = audioState.currentRpm * freqPerRpm
 
   # --- Dynamic Sound Shaping ---
