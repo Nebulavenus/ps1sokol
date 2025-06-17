@@ -1517,6 +1517,13 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
   elif e.`type` == EventType.eventTypeUnfocused:
     state.gameHasFocus = false
 
+  # Manually grant focus on a mouse click. This is a crucial fallback
+  # for environments like itch.io's iframe where the 'eventTypeFocused'
+  # may not fire reliably when the canvas is first clicked.
+  if e.`type` == EventType.eventTypeMouseDown:
+    if not state.gameHasFocus:
+      state.gameHasFocus = true
+
   # Mouse
   if e.`type` == EventType.eventTypeMouseScroll:
     state.cameraOffsetY += e.scrollY * 0.5
