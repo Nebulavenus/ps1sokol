@@ -235,7 +235,21 @@ proc loadMeshFromCache*(fs: RuntimeFS, path: string): (seq[Vertex], seq[uint16])
     stream.close()
   return (vertices, indices)
 
-proc loadAndProcessMesh*(fs: var RuntimeFS, modelFilename: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): (Mesh, seq[Vertex], seq[uint16]) =
+proc getBounds*(vertices: seq[Vertex]): AABB =
+  result.min = vec3(Inf, Inf, Inf)
+  result.max = vec3(-Inf, -Inf, -Inf)
+  for v in vertices:
+    result.min.x = min(result.min.x, v.x)
+    result.min.y = min(result.min.y, v.y)
+    result.min.z = min(result.min.z, v.z)
+    result.max.x = max(result.max.x, v.x)
+    result.max.y = max(result.max.y, v.y)
+    result.max.z = max(result.max.z, v.z)
+
+proc loadAndProcessMesh*(state: var State, fs: var RuntimeFS, modelFilename: string, aoParams: AOBakeParams, texture: Image, sampler: Sampler): Mesh =
+  if state.res.meshes.hasKey(modelFilename):
+    return state.res.meshes[modelFilename]
+
   var
     cpuVertices: seq[Vertex]
     cpuIndices: seq[uint16]
@@ -247,7 +261,7 @@ proc loadAndProcessMesh*(fs: var RuntimeFS, modelFilename: string, aoParams: AOB
   else:
     let modelContentOpt = fs.get(modelFilename)
     if modelContentOpt.isNone:
-      return
+      return Mesh()
 
     let fileLines = modelContentOpt.get().splitLines()
     let fileExt = modelFilename.splitFile.ext
@@ -257,7 +271,7 @@ proc loadAndProcessMesh*(fs: var RuntimeFS, modelFilename: string, aoParams: AOB
     of ".obj":
       (cpuVertices, cpuIndices) = loadObj(fileLines)
     else:
-      return
+      return Mesh()
 
     if cpuVertices.len > 0:
       bakeBentNormalWithGrid(cpuVertices, cpuIndices, aoParams, gridResolution = 64)
@@ -272,14 +286,54 @@ proc loadAndProcessMesh*(fs: var RuntimeFS, modelFilename: string, aoParams: AOB
       usage: BufferUsage(indexBuffer: true),
       data: sg.Range(addr: cpuIndices[0].addr, size: cpuIndices.len * sizeof(uint16))
     ))
-    result[0].indexCount = cpuIndices.len.int32
-    result[0].bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
-    result[0].bindings.images[shd.imgUTexture] = texture
-    result[0].bindings.samplers[shd.smpUSampler] = sampler
-    result[1] = cpuVertices
-    result[2] = cpuIndices
+    var mesh = Mesh()
+    mesh.indexCount = cpuIndices.len.int32
+    mesh.bindings = Bindings(vertexBuffers: [vbuf], indexBuffer: ibuf)
+    mesh.bindings.images[shd.imgUTexture] = texture
+    mesh.bindings.samplers[shd.smpUSampler] = sampler
+    mesh.bounds = getBounds(cpuVertices)
+    
+    state.res.meshes[modelFilename] = mesh
+    return mesh
+  else:
+    return Mesh()
 
-proc loadTexture*(fs: RuntimeFS, filename: string): sg.Image =
+proc loadAndProcessMeshCollision*(fs: var RuntimeFS, modelFilename: string): (seq[Vertex], seq[uint16]) =
+  let modelContentOpt = fs.get(modelFilename)
+  if modelContentOpt.isNone:
+    return
+
+  let fileLines = modelContentOpt.get().splitLines()
+  let fileExt = modelFilename.splitFile.ext
+  case fileExt.toLower()
+  of ".ply":
+    return loadPly(fileLines)
+  of ".obj":
+    return loadObj(fileLines)
+  else: discard
+
+proc clearResources*(state: var State) =
+  ## Destroys all GPU resources held by the manager.
+  for mesh in state.res.meshes.values:
+    for buf in mesh.bindings.vertexBuffers:
+      if buf.id != 0: sg.destroyBuffer(buf)
+    if mesh.bindings.indexBuffer.id != 0:
+      sg.destroyBuffer(mesh.bindings.indexBuffer)
+  
+  for img in state.res.images.values:
+    if img.id != 0: sg.destroyImage(img)
+    
+  for smp in state.res.samplers.values:
+    if smp.id != 0: sg.destroySampler(smp)
+    
+  state.res.meshes.clear()
+  state.res.images.clear()
+  state.res.samplers.clear()
+
+proc loadTexture*(state: var State, fs: RuntimeFS, filename: string): sg.Image =
+  if state.res.images.hasKey(filename):
+    return state.res.images[filename]
+
   let qoiContentOpt = fs.get(filename)
   if qoiContentOpt.isNone:
     return sg.Image()
@@ -310,7 +364,7 @@ proc loadTexture*(fs: RuntimeFS, filename: string): sg.Image =
       srcIndex += 3
       dstIndex += 4
 
-  result = sg.makeImage(sg.ImageDesc(
+  let img = sg.makeImage(sg.ImageDesc(
     width: qoiImage.header.width.int32,
     height: qoiImage.header.height.int32,
     pixelFormat: finalPixelFormat,
@@ -318,3 +372,5 @@ proc loadTexture*(fs: RuntimeFS, filename: string): sg.Image =
       subimage: [ [ sg.Range(addr: finalPixelData[0].addr, size: qoiImage.header.width.int32 * qoiImage.header.height.int32 * 4) ] ]
     )
   ))
+  state.res.images[filename] = img
+  return img

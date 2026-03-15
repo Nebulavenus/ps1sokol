@@ -1,6 +1,7 @@
 import sokol/gfx as sg
 import math/vec3
 import math/mat4
+import tables
 
 type
   Vertex* = object
@@ -13,6 +14,7 @@ type
   Mesh* = object
     bindings*: Bindings
     indexCount*: int32
+    bounds*: AABB
 
   # Axis-Aligned Bounding Box
   AABB* = object
@@ -49,9 +51,16 @@ type
     turnRight*: bool
     drift*: bool
 
+  ResourceManager* = object
+    meshes*: Table[string, Mesh]
+    images*: Table[string, sg.Image]
+    samplers*: Table[string, sg.Sampler]
+
   State* = object
     # App
     gameHasFocus*: bool
+    # Asset Management
+    res*: ResourceManager
     # Rendering
     pip*: Pipeline
     passAction*: sg.PassAction
@@ -63,8 +72,10 @@ type
     # CPU-side collision geometry for the road
     roadCollisionVertices*: seq[Vertex]
     roadCollisionIndices*: seq[uint16]
+    roadGrid*: UniformGrid
     barrierCollisionVertices*: seq[Vertex]
     barrierCollisionIndices*: seq[uint16]
+    barrierGrid*: UniformGrid
     # Player's car mesh
     carMesh1*: Mesh # Body
     carMesh2*: Mesh # Rear wheel

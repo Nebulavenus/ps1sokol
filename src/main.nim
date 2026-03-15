@@ -14,8 +14,11 @@ import audio
 import rtfs
 import types
 import mesh_loader
+import aobaker
 import physics
 import options
+import culling
+import tables
 
 when defined(emscripten):
   proc emscripten_run_script(script: cstring) {.importc, header: "<emscripten/emscripten.h>".}
@@ -98,30 +101,27 @@ proc init() {.cdecl.} =
 
   loadMusic(ASSETS_FS, "music/sunset_relay.qoa")
 
-  let trackTexture1 = loadTexture(ASSETS_FS, "map2"/"track_road.qoi")
-  let trackTexture2 = loadTexture(ASSETS_FS, "map2"/"track_shape.qoi")
-  let trackTexture3 = loadTexture(ASSETS_FS, "map2"/"track_trees.qoi")
-  let carTexture = loadTexture(ASSETS_FS, "car"/"trueno.qoi")
+  # Load the meshes. One function handles everything
+  let trackTexture1 = loadTexture(state, ASSETS_FS, "map2"/"track_road.qoi")
+  let trackTexture2 = loadTexture(state, ASSETS_FS, "map2"/"track_shape.qoi")
+  let trackTexture3 = loadTexture(state, ASSETS_FS, "map2"/"track_trees.qoi")
+  let carTexture = loadTexture(state, ASSETS_FS, "car"/"trueno.qoi")
 
-  var trackMesh1 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_road.ply", aoParams, trackTexture1, pointSmp)
-  var trackMesh2 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_shape.ply", aoParams, trackTexture2, pointSmp)
-  var trackMesh3 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_trees.ply", aoParams, trackTexture3, pointSmp)
-  var trackMesh5 = loadAndProcessMesh(ASSETS_FS, "map2"/"track_barrier.ply", aoParams, trackTexture1, pointSmp)
-  var carMesh1 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno.ply", aoParams, carTexture, pointSmp)
-  var carMesh2 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_back.ply", aoParams, carTexture, pointSmp)
-  var carMesh3 = loadAndProcessMesh(ASSETS_FS, "car"/"trueno_front.ply", aoParams, carTexture, pointSmp)
+  state.trackMesh1 = loadAndProcessMesh(state, ASSETS_FS, "map2"/"track_road.ply", aoParams, trackTexture1, pointSmp)
+  state.trackMesh2 = loadAndProcessMesh(state, ASSETS_FS, "map2"/"track_shape.ply", aoParams, trackTexture2, pointSmp)
+  state.trackMesh3 = loadAndProcessMesh(state, ASSETS_FS, "map2"/"track_trees.ply", aoParams, trackTexture3, pointSmp)
+  let barrierMesh = loadAndProcessMesh(state, ASSETS_FS, "map2"/"track_barrier.ply", aoParams, trackTexture1, pointSmp)
+  state.carMesh1 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno.ply", aoParams, carTexture, pointSmp)
+  state.carMesh2 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_back.ply", aoParams, carTexture, pointSmp)
+  state.carMesh3 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_front.ply", aoParams, carTexture, pointSmp)
 
-  state.trackMesh1 = trackMesh1[0]
-  state.trackMesh2 = trackMesh2[0]
-  state.trackMesh3 = trackMesh3[0]
-  state.carMesh1 = carMesh1[0]
-  state.carMesh2 = carMesh2[0]
-  state.carMesh3 = carMesh3[0]
+  (state.roadCollisionVertices, state.roadCollisionIndices) = loadAndProcessMeshCollision(ASSETS_FS, "map2"/"track_road.ply")
+  state.roadGrid = initUniformGrid(state.roadCollisionVertices, 64)
+  populateGrid(state.roadGrid, state.roadCollisionVertices, state.roadCollisionIndices)
 
-  state.roadCollisionVertices = trackMesh1[1]
-  state.roadCollisionIndices = trackMesh1[2]
-  state.barrierCollisionVertices = trackMesh5[1]
-  state.barrierCollisionIndices = trackMesh5[2]
+  (state.barrierCollisionVertices, state.barrierCollisionIndices) = loadAndProcessMeshCollision(ASSETS_FS, "map2"/"track_barrier.ply")
+  state.barrierGrid = initUniformGrid(state.barrierCollisionVertices, 64)
+  populateGrid(state.barrierGrid, state.barrierCollisionVertices, state.barrierCollisionIndices)
 
   state.player.position = vec3(0.0, 12, 25.0)
   state.player.velocity = vec3(0, 0, 0)
@@ -249,15 +249,22 @@ proc frame() {.cdecl.} =
     u_camPos: state.cameraPos,
     u_jitterAmount: 240.0,
   )
-  sg.applyBindings(state.trackMesh1.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
-  sg.draw(0, state.trackMesh1.indexCount, 1)
-  sg.applyBindings(state.trackMesh2.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
-  sg.draw(0, state.trackMesh2.indexCount, 1)
-  sg.applyBindings(state.trackMesh3.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
-  sg.draw(0, state.trackMesh3.indexCount, 1)
+  let camForward = norm(state.cameraTarget - state.cameraPos)
+
+  if isMeshVisible(state.trackMesh1, state.cameraPos, camForward):
+    sg.applyBindings(state.trackMesh1.bindings)
+    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
+    sg.draw(0, state.trackMesh1.indexCount, 1)
+
+  if isMeshVisible(state.trackMesh2, state.cameraPos, camForward):
+    sg.applyBindings(state.trackMesh2.bindings)
+    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
+    sg.draw(0, state.trackMesh2.indexCount, 1)
+
+  if isMeshVisible(state.trackMesh3, state.cameraPos, camForward):
+    sg.applyBindings(state.trackMesh3.bindings)
+    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
+    sg.draw(0, state.trackMesh3.indexCount, 1)
 
   let carModel = translate(state.player.position) * state.player.rotation
   var carVsParams = shd.VsParams(
@@ -289,6 +296,7 @@ proc frame() {.cdecl.} =
   sg.commit()
 
 proc cleanup() {.cdecl.} =
+  clearResources(state)
   sdtx.shutdown()
   audioShutdown()
   sg.shutdown()
