@@ -155,7 +155,6 @@
 ##
 
 import std/streams
-import std/strutils
 
 type
   Channels* = enum

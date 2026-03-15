@@ -1,6 +1,5 @@
 # rtfs.nim - A simple runtime filesystem for game assets
 import std/os
-import std/strutils
 import std/strformat
 import std/options; export options
 

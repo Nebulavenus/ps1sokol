@@ -2,12 +2,10 @@ import sokol/app as sapp
 import sokol/audio as saudio
 import sokol/log as slog
 import math
-import math/vec3 # For len() and dot() if needed for more complex sound logic
 import std/random # For noise generation
-import strutils # For cstring
 import streams
 import strformat
-import rtfs, qoa, os
+import rtfs, qoa
 
 const
   DEFAULT_MUSIC_VOLUME = 1.0 # Default music volume (0.0 to 1.0)

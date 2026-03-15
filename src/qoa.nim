@@ -9,7 +9,6 @@
 # Nim port of QOA by AI based on the original C code
 # and transpiled version of Swift with Fusion lang.
 #
-import std/math
 
 # -----------------------------------------------------------------------------
 # LMS Filter (Least Mean Squares)
