@@ -326,6 +326,18 @@ proc clearResources*(state: var State) =
   for smp in state.res.samplers.values:
     if smp.id != 0: sg.destroySampler(smp)
     
+  if state.shadowTexture.id != 0: sg.destroyImage(state.shadowTexture)
+  if state.shadowSampler.id != 0: sg.destroySampler(state.shadowSampler)
+  if state.particleTexture.id != 0: sg.destroyImage(state.particleTexture)
+  if state.offscreenImg.id != 0: sg.destroyImage(state.offscreenImg)
+  if state.offscreenDepthImg.id != 0: sg.destroyImage(state.offscreenDepthImg)
+  if state.offscreenAttachments.id != 0: sg.destroyAttachments(state.offscreenAttachments)
+  if state.offscreenSampler.id != 0: sg.destroySampler(state.offscreenSampler)
+  if state.quadVBuf.id != 0: sg.destroyBuffer(state.quadVBuf)
+  if state.quadIBuf.id != 0: sg.destroyBuffer(state.quadIBuf)
+  if state.screenVBuf.id != 0: sg.destroyBuffer(state.screenVBuf)
+  if state.screenIBuf.id != 0: sg.destroyBuffer(state.screenIBuf)
+
   state.res.meshes.clear()
   state.res.images.clear()
   state.res.samplers.clear()

@@ -11,6 +11,11 @@ type
     u*, v*: float32
     bxN*, byN*, bzN*: float32 # Bent Normal vector
 
+  SpriteVertex* = object
+    x*, y*, z*: float32
+    color*: uint32
+    u*, v*: float32
+
   Mesh* = object
     bindings*: Bindings
     indexCount*: int32
@@ -63,6 +68,20 @@ type
     res*: ResourceManager
     # Rendering
     pip*: Pipeline
+    pipSprite*: Pipeline
+    pipPost*: Pipeline
+    offscreenImg*: sg.Image
+    offscreenDepthImg*: sg.Image
+    offscreenAttachments*: sg.Attachments
+    offscreenSampler*: sg.Sampler
+    offscreenPassAction*: sg.PassAction
+    screenVBuf*: sg.Buffer
+    screenIBuf*: sg.Buffer
+    shadowTexture*: sg.Image
+    shadowSampler*: sg.Sampler
+    particleTexture*: sg.Image
+    quadVBuf*: sg.Buffer
+    quadIBuf*: sg.Buffer
     passAction*: sg.PassAction
     # Track meshes
     trackMesh1*: Mesh # Road
@@ -86,6 +105,8 @@ type
     cameraOffsetY*: float32
     cameraPos*: Vec3 # Camera's actual world position
     cameraTarget*: Vec3 # Point the camera is looking at
+    particles*: ParticleSystem
+    time*: float32
     # From audio.nim calculated values
     debugSpeed*: float32
     debugRpm*: float32
@@ -104,3 +125,14 @@ type
   CollisionResponse* = object
     pushOut*: Vec3
     collided*: bool
+
+  Particle* = object
+    pos*: Vec3
+    vel*: Vec3
+    color*: uint32
+    life*: float32
+    maxLife*: float32
+
+  ParticleSystem* = object
+    pool*: array[1024, Particle]
+    nextIndex*: int

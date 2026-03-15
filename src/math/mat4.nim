@@ -101,6 +101,12 @@ proc translate*(translation: Vec3): Mat4 =
   result.m[3][1] = translation.y
   result.m[3][2] = translation.z
 
+proc scale*(s: Vec3): Mat4 =
+  result = identity()
+  result.m[0][0] = s.x
+  result.m[1][1] = s.y
+  result.m[2][2] = s.z
+
 proc fromCols*(right, up, forward, translation: Vec3): Mat4 =
   ## Constructs a 4x4 matrix from its column vectors (basis axes and translation).
   ## This is useful for creating a rotation/orientation matrix from known direction vectors.

@@ -21,7 +21,9 @@ import strformat
 let shaders = [
     "cube",
     "texcube",
-    "default"
+    "default",
+    "sprite",
+    "postfx"
 ]
 
 let audios = [
