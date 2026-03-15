@@ -49,6 +49,24 @@ type
     yaw*: float32
     angularVelocity*: float32
 
+  AIVehicle* = object
+    position*: Vec3
+    velocity*: Vec3
+    rotation*: Mat4
+    yaw*: float32
+    angularVelocity*: float32
+    targetNode*: int
+    currentCheckpointIdx*: int
+    lapCount*: int
+
+  Checkpoint* = object
+    pos*: Vec3
+    radius*: float32
+
+  ReplayFrame* = object
+    pos*: Vec3
+    yaw*: float32
+
   InputState* = object
     accelerate*: bool
     brake*: bool
@@ -80,6 +98,7 @@ type
     shadowTexture*: sg.Image
     shadowSampler*: sg.Sampler
     particleTexture*: sg.Image
+    checkpointTexture*: sg.Image
     quadVBuf*: sg.Buffer
     quadIBuf*: sg.Buffer
     passAction*: sg.PassAction
@@ -108,6 +127,20 @@ type
     particles*: ParticleSystem
     lastEmitPos*: Vec3
     time*: float32
+    # Gameplay
+    checkpoints*: seq[Checkpoint]
+    currentCheckpointIdx*: int
+    lapCount*: int
+    lapStartTime*: float32
+    bestLapTime*: float32
+    lastLapTime*: float32
+    # AI
+    aiCars*: seq[AIVehicle]
+    pathNodes*: seq[Vec3]
+    # Replay
+    replayBuffer*: seq[ReplayFrame]
+    isReplaying*: bool
+    replayIndex*: int
     # From audio.nim calculated values
     debugSpeed*: float32
     debugRpm*: float32
