@@ -63,9 +63,18 @@ proc initParticleTexture() =
       let dx = x.float - size.float * 0.5
       let dy = y.float - size.float * 0.5
       let dist = sqrt(dx*dx + dy*dy)
-      let radius = size.float * 0.4
-      let alpha = clamp(1.0 - (dist / radius), 0.0, 1.0)
-      let a8 = (alpha * 255.0).uint8
+      
+      # Multiple blobs for "volume" feel
+      var alpha = 0.0
+      # Main blob
+      alpha += clamp(1.0 - (dist / (size.float * 0.4)), 0.0, 1.0)
+      # Secondary offset blobs
+      let d2 = sqrt((dx-4)*(dx-4) + (dy-4)*(dy-4))
+      alpha += clamp(0.5 - (d2 / (size.float * 0.3)), 0.0, 0.5)
+      let d3 = sqrt((dx+5)*(dx+5) + (dy-2)*(dy-2))
+      alpha += clamp(0.4 - (d3 / (size.float * 0.2)), 0.0, 0.4)
+      
+      let a8 = (clamp(alpha, 0.0, 1.0) * 255.0).uint8
       pixels[y * size + x] = packColor(255, 255, 255, a8)
 
   state.particleTexture = sg.makeImage(sg.ImageDesc(
@@ -131,7 +140,7 @@ proc drawParticles(proj, view: Mat4) =
     let camRight = norm(cross(camForward, vec3.up()))
     let camUp = norm(cross(camRight, camForward))
     
-    let s = (p.life / p.maxLife) * 0.5
+    let s = (p.life / p.maxLife) * 0.8
     let particleModel = fromCols(camRight * s, camUp * s, camForward * s, p.pos)
     
     var vsParams = spr.VsParams(
@@ -144,7 +153,7 @@ proc drawParticles(proj, view: Mat4) =
     
     var fsParams = spr.FsParams(
       u_fogColor: vec3(0.25f, 0.5f, 0.75f),
-      u_fogNear: 4.0f,
+      u_fogNear: 50.0f, # Push fog back for particles
       u_fogFar: 150.0f,
       u_alphaThreshold: 0.1f
     )
@@ -225,7 +234,6 @@ proc initSpritePipeline() =
   ))
 
 proc initOffscreen() =
-  # Create a render target image
   state.offscreenImg = sg.makeImage(sg.ImageDesc(
     usage: ImageUsage(renderAttachment: true),
     width: 640,
@@ -252,7 +260,6 @@ proc initOffscreen() =
   attDesc.depthStencil.image = state.offscreenDepthImg
   state.offscreenAttachments = sg.makeAttachments(attDesc)
   
-  # Offscreen pass action (clear to fog color)
   state.offscreenPassAction = PassAction(
     colors: [
       ColorAttachmentAction(
@@ -265,6 +272,7 @@ proc initOffscreen() =
       clearValue: 1.0
     )
   )
+
 proc initScreenQuad() =
   let vertices = [
     # x, y, u, v
@@ -273,7 +281,6 @@ proc initScreenQuad() =
      1.0f,  1.0f,  1.0f, 0.0f,
     -1.0f,  1.0f,  0.0f, 0.0f,
   ]
-
   state.screenVBuf = sg.makeBuffer(BufferDesc(
     usage: BufferUsage(vertexBuffer: true),
     data: sg.Range(addr: vertices[0].addr, size: vertices.sizeof)
@@ -330,8 +337,8 @@ proc drawShadow(proj, view: Mat4) =
   )
   var fsParams = spr.FsParams(
     u_fogColor: vec3(0.25f, 0.5f, 0.75f),
-    u_fogNear: 4.0f,
-    u_fogFar: 150.0f,
+    u_fogNear: 1000.0f, # Disable fog for shadow
+    u_fogFar: 1500.0f,
     u_alphaThreshold: 0.01f
   )
   var bindings = Bindings()
@@ -417,6 +424,7 @@ proc init() {.cdecl.} =
   state.cameraPos = vec3(0.0, 10.0, 2.0)
   state.cameraOffsetY = 5.0
   state.cameraTarget = state.player.position
+  state.lastEmitPos = state.player.position
 
 proc frame() {.cdecl.} =
   let dt = sapp.frameDuration()
@@ -498,25 +506,34 @@ proc frame() {.cdecl.} =
     let newRight = norm(cross(newForward, surfaceUp))
     let finalForward = norm(cross(surfaceUp, newRight))
     state.player.rotation = fromCols(newRight, surfaceUp, finalForward, vec3(0,0,0))
+    
     if state.input.drift:
       let carRot = state.player.rotation
-      let rearLeftPos = state.player.position + (carRot * vec3(-0.8, -0.5, 1.2))
-      let rearRightPos = state.player.position + (carRot * vec3(0.8, -0.5, 1.2))
-      let smokeVel = (carRot * vec3(0, 0.5, 1.0)) * 2.0
-      for i in 0..1:
+      let distMoved = len(state.player.position - state.lastEmitPos)
+      let numSteps = clamp(int(distMoved / 0.05), 1, 15) # Smaller steps for better density
+      for s in 0 ..< numSteps:
+        let t = s.float / numSteps.float
+        let lerpPos = vec3.lerpV(state.lastEmitPos, state.player.position, t)
+        let leftEmitPos = lerpPos + (carRot * vec3(-0.8, -0.5, 1.2))
+        let rightEmitPos = lerpPos + (carRot * vec3(0.8, -0.5, 1.2))
+        let smokeVel = (carRot * vec3(0, 0.5, 1.0)) * 2.0
         let randVel = vec3(rand(-0.5..0.5), rand(0.0..0.5), rand(-0.5..0.5))
-        emitParticle(rearLeftPos, smokeVel + randVel, packColor(200, 200, 200, 150), 1.0)
-        emitParticle(rearRightPos, smokeVel + randVel, packColor(200, 200, 200, 150), 1.0)
+        emitParticle(leftEmitPos, smokeVel + randVel, packColor(200, 200, 200, 150), 1.0)
+        emitParticle(rightEmitPos, smokeVel + randVel, packColor(200, 200, 200, 150), 1.0)
+    
+    let exhaustPos = state.player.position + (state.player.rotation * vec3(-0.6, -0.4, 1.5))
+    let exhaustVel = (state.player.rotation * vec3(0, 0.2, 0.5)) + vec3(rand(-0.1..0.1), rand(0.1..0.2), rand(-0.1..0.1))
+    emitParticle(exhaustPos, exhaustVel, packColor(150, 150, 150, 100), 0.5)
+    state.lastEmitPos = state.player.position
+
   updateParticles(dt)
   updateCamera(state, dt)
   audioGenerateSamples()
   let fsParams = computeFsParams()
   let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 150.0f)
   let view = lookat(state.cameraPos, state.cameraTarget, vec3.up())
-  var offscreenPass = Pass(
-    action: state.offscreenPassAction,
-    attachments: state.offscreenAttachments
-  )
+  
+  var offscreenPass = Pass(action: state.offscreenPassAction, attachments: state.offscreenAttachments)
   sg.beginPass(offscreenPass)
   sg.applyPipeline(state.pip)
   sg.applyUniforms(shd.ubFsParams, sg.Range(addr: fsParams.addr, size: fsParams.sizeof))
@@ -535,12 +552,12 @@ proc frame() {.cdecl.} =
     sg.applyBindings(state.trackMesh3.bindings)
     sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
     sg.draw(0, state.trackMesh3.indexCount, 1)
+  
   drawShadow(proj, view)
   drawParticles(proj, view)
-
+  
   sg.applyPipeline(state.pip)
   let carModel = translate(state.player.position) * state.player.rotation
-
   var carVsParams = shd.VsParams(u_mvp: proj * view * carModel, u_model: carModel, u_camPos: state.cameraPos, u_jitterAmount: sapp.heightf())
   sg.applyBindings(state.carMesh1.bindings)
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
@@ -552,6 +569,7 @@ proc frame() {.cdecl.} =
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
   sg.draw(0, state.carMesh3.indexCount, 1)
   sg.endPass()
+  
   sg.beginPass(Pass(action: passAction, swapchain: sglue.swapchain()))
   drawPostfx()
   sdtx.canvas(sapp.widthf()*0.5, sapp.heightf()*0.5)
@@ -572,15 +590,12 @@ proc cleanup() {.cdecl.} =
   sg.shutdown()
 
 proc event(e: ptr sapp.Event) {.cdecl.} =
-  if e.`type` == EventType.eventTypeFocused:
-    state.gameHasFocus = true
-  elif e.`type` == EventType.eventTypeUnfocused:
-    state.gameHasFocus = false
+  if e.`type` == EventType.eventTypeFocused: state.gameHasFocus = true
+  elif e.`type` == EventType.eventTypeUnfocused: state.gameHasFocus = false
   if e.`type` == EventType.eventTypeMouseDown:
     if not state.gameHasFocus:
       state.gameHasFocus = true
-      when defined(emscripten):
-        emscripten_run_script("document.getElementById('canvas').focus();")
+      when defined(emscripten): emscripten_run_script("document.getElementById('canvas').focus();")
   if e.`type` == EventType.eventTypeMouseScroll:
     state.cameraOffsetY += e.scrollY * 0.5
     state.cameraOffsetY = max(state.cameraOffsetY, 0.0)

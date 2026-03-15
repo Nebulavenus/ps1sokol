@@ -31,7 +31,7 @@ void main() {
     gl_Position = clip_pos;
 
     v_color = a_color0;
-    v_dist = distance(a_position, u_camPos);
+    v_dist = clip_pos.w; 
     v_affine_uv = vec3(a_texcoord0 * clip_pos.w, clip_pos.w);
 }
 #pragma sokol @end

@@ -106,6 +106,7 @@ type
     cameraPos*: Vec3 # Camera's actual world position
     cameraTarget*: Vec3 # Point the camera is looking at
     particles*: ParticleSystem
+    lastEmitPos*: Vec3
     time*: float32
     # From audio.nim calculated values
     debugSpeed*: float32
@@ -129,6 +130,8 @@ type
   Particle* = object
     pos*: Vec3
     vel*: Vec3
+    rot*: float32
+    rotVel*: float32
     color*: uint32
     life*: float32
     maxLife*: float32
