@@ -547,6 +547,7 @@ proc init() {.cdecl.} =
   state.player.yaw = 0.0
   state.player.angularVelocity = 0.0
   state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+  state.cameraMode = CameraMode.Follow
   state.cameraPos = vec3(0.0, 10.0, 2.0)
   state.cameraOffsetY = 5.0
   state.cameraTarget = state.player.position
@@ -741,17 +742,18 @@ proc frame() {.cdecl.} =
   
   sg.applyPipeline(state.pip)
   # Draw Player
-  let carModel = translate(state.player.position) * state.player.rotation
-  var carVsParams = shd.VsParams(u_mvp: proj * view * carModel, u_model: carModel, u_camPos: state.cameraPos, u_jitterAmount: sapp.heightf())
-  sg.applyBindings(state.carMesh1.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
-  sg.draw(0, state.carMesh1.indexCount, 1)
-  sg.applyBindings(state.carMesh2.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
-  sg.draw(0, state.carMesh2.indexCount, 1)
-  sg.applyBindings(state.carMesh3.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
-  sg.draw(0, state.carMesh3.indexCount, 1)
+  if state.cameraMode == CameraMode.Follow:
+    let carModel = translate(state.player.position) * state.player.rotation
+    var carVsParams = shd.VsParams(u_mvp: proj * view * carModel, u_model: carModel, u_camPos: state.cameraPos, u_jitterAmount: sapp.heightf())
+    sg.applyBindings(state.carMesh1.bindings)
+    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
+    sg.draw(0, state.carMesh1.indexCount, 1)
+    sg.applyBindings(state.carMesh2.bindings)
+    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
+    sg.draw(0, state.carMesh2.indexCount, 1)
+    sg.applyBindings(state.carMesh3.bindings)
+    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
+    sg.draw(0, state.carMesh3.indexCount, 1)
 
   sg.endPass()
   
@@ -813,6 +815,9 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
         let toNext = state.checkpoints[state.currentCheckpointIdx].pos - respawnPos
         state.player.yaw = (arctan2(toNext.x, toNext.z) + PI) * (180.0 / PI)
         state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+    of keyCodeC:
+      if isDown:
+        state.cameraMode = if state.cameraMode == CameraMode.Follow: CameraMode.Front else: CameraMode.Follow
     of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step)
     of keyCode2: state.aoShadowStrength += step
     of keyCode3: state.skyLightIntensity = max(0.0, state.skyLightIntensity - step)

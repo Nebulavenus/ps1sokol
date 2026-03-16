@@ -79,6 +79,10 @@ type
     images*: Table[string, sg.Image]
     samplers*: Table[string, sg.Sampler]
 
+  CameraMode* = enum
+    Follow,
+    Front
+
   State* = object
     # App
     gameHasFocus*: bool
@@ -121,6 +125,7 @@ type
     # Input & Logic
     input*: InputState
     player*: PlayerVehicle
+    cameraMode*: CameraMode
     cameraOffsetY*: float32
     cameraPos*: Vec3 # Camera's actual world position
     cameraTarget*: Vec3 # Point the camera is looking at
