@@ -49,6 +49,11 @@ type
     yaw*: float32
     angularVelocity*: float32
 
+  Difficulty* = enum
+    Easy,
+    Medium,
+    Hard
+
   AIVehicle* = object
     position*: Vec3
     velocity*: Vec3
@@ -58,6 +63,8 @@ type
     targetNode*: int
     currentCheckpointIdx*: int
     lapCount*: int
+    difficulty*: Difficulty
+    name*: string
 
   Checkpoint* = object
     pos*: Vec3

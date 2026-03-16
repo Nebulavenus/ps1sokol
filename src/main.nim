@@ -529,9 +529,27 @@ proc loadLevel*(state: var State, fs: var RuntimeFS, mapDir: string) =
   state.checkpoints = @[]
   for i in countup(0, state.pathNodes.len - 1, 4):
     state.checkpoints.add(Checkpoint(pos: state.pathNodes[i], radius: 18.0))
-  
-  restartLevel(state)
 
+  # Initialize AI cars
+  state.aiCars = @[]
+  if state.pathNodes.len > 10:
+    let botConfigs = [
+      (name: "BOB", diff: Difficulty.Easy),
+      (name: "KEVIN", diff: Difficulty.Medium),
+      (name: "TAKUMI", diff: Difficulty.Hard)
+    ]
+    for i, config in botConfigs:
+      var ai: AIVehicle
+      let startIdx = (i + 1) * 2 # Offset AI cars slightly
+      ai.position = state.pathNodes[startIdx] + vec3(0, 1, 0)
+      ai.targetNode = (startIdx + 1) mod state.pathNodes.len
+      ai.yaw = 0.0
+      ai.rotation = rotate(ai.yaw, vec3(0, 1, 0))
+      ai.difficulty = config.diff
+      ai.name = config.name
+      state.aiCars.add(ai)
+
+  restartLevel(state)
 proc init() {.cdecl.} =
   ASSETS_FS = newRuntimeFS("assets")
   state.gameHasFocus = not defined(emscripten)
@@ -599,6 +617,86 @@ proc init() {.cdecl.} =
   state.menu.selectedItem = 0
   state.menu.itemCount = 3 # START, CONTROLS, QUIT
 
+proc updateAI(state: var State, dt: float32) =
+  for i in 0 ..< state.aiCars.len:
+    var ai = addr state.aiCars[i]
+    let targetPos = state.pathNodes[ai.targetNode]
+    let toTarget = targetPos - ai.position
+    let dist = len(toTarget)
+    
+    if dist < 5.0:
+      ai.targetNode = (ai.targetNode + 1) mod state.pathNodes.len
+    
+    let dir = norm(toTarget)
+    let desiredYaw = (arctan2(dir.x, dir.z) + PI) * (180.0 / PI)
+    
+    # Smoothly rotate towards target
+    var diff = desiredYaw - ai.yaw
+    while diff > 180.0: diff -= 360.0
+    while diff < -180.0: diff += 360.0
+    
+    # Difficulty parameters
+    var turnSpeed = 2.0f
+    var moveSpeed = 20.0f
+    case ai.difficulty
+    of Difficulty.Easy:
+      turnSpeed = 1.0f
+      moveSpeed = 15.0f
+    of Difficulty.Medium:
+      turnSpeed = 2.5f
+      moveSpeed = 22.0f
+    of Difficulty.Hard:
+      turnSpeed = 4.5f
+      moveSpeed = 30.0f
+
+    ai.yaw += diff * dt * turnSpeed
+    
+    ai.rotation = rotate(ai.yaw, vec3(0, 1, 0))
+    let forward = ai.rotation * vec3(0, 0, -1)
+    
+    # Simple movement
+    ai.position += forward * moveSpeed * dt
+    
+    # Surface alignment
+    let groundInfo = getSurfaceInfo(state, ai.position)
+    if groundInfo.isSome:
+      ai.position.y = groundInfo.get().pos.y + 0.9
+      let groundNormal = groundInfo.get().normal
+      let right = norm(cross(forward, groundNormal))
+      let finalForward = norm(cross(groundNormal, right))
+      ai.rotation = fromCols(right, groundNormal, finalForward, vec3(0,0,0))
+
+proc worldToScreen(worldPos: Vec3, proj, view: Mat4, width, height: float32): (Vec3, bool) =
+  let clipPos = proj * view * worldPos
+  # In my persp matrix, I might need to check if it's behind
+  # Let's check Z in clip space. For my persp matrix, Z is usually positive in front or similar.
+  # But simpler is to check the W from the projection if I had it.
+  # My Mat4 * Vec3 already does the W division.
+  
+  # Check if behind camera using view-space Z
+  let viewPos = view * worldPos
+  if viewPos.z > 0.0: # In -Z forward, positive Z is behind
+    return (vec3(0,0,0), false)
+
+  # ndc to screen
+  let screenX = (clipPos.x + 1.0) * 0.5 * width
+  let screenY = (1.0 - clipPos.y) * 0.5 * height
+  return (vec3(screenX, screenY, 0), true)
+
+proc drawVehicle(proj, view, model: Mat4, camPos: Vec3) =
+  var vsParams = shd.VsParams(u_mvp: proj * view * model, u_model: model, u_camPos: camPos, u_jitterAmount: sapp.heightf())
+  sg.applyBindings(state.carMesh1.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
+  sg.draw(0, state.carMesh1.indexCount, 1)
+  
+  sg.applyBindings(state.carMesh2.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
+  sg.draw(0, state.carMesh2.indexCount, 1)
+  
+  sg.applyBindings(state.carMesh3.bindings)
+  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
+  sg.draw(0, state.carMesh3.indexCount, 1)
+
 proc frame() {.cdecl.} =
   let dt = sapp.frameDuration()
   state.time += dt
@@ -615,6 +713,7 @@ proc frame() {.cdecl.} =
     return
 
   if state.gameState == GameState.Playing:
+    updateAI(state, dt)
     # ... physics and logic ...
     block VehiclePhysics:
       const engineForce = 25.0
@@ -789,19 +888,15 @@ proc frame() {.cdecl.} =
   drawParticles(proj, view)
   
   sg.applyPipeline(state.pip)
+  # Draw AI Cars
+  for ai in state.aiCars:
+    let aiModel = translate(ai.position) * ai.rotation
+    drawVehicle(proj, view, aiModel, state.cameraPos)
+
   # Draw Player
   if state.cameraMode == CameraMode.Follow:
     let carModel = translate(state.player.position) * state.player.rotation
-    var carVsParams = shd.VsParams(u_mvp: proj * view * carModel, u_model: carModel, u_camPos: state.cameraPos, u_jitterAmount: sapp.heightf())
-    sg.applyBindings(state.carMesh1.bindings)
-    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
-    sg.draw(0, state.carMesh1.indexCount, 1)
-    sg.applyBindings(state.carMesh2.bindings)
-    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
-    sg.draw(0, state.carMesh2.indexCount, 1)
-    sg.applyBindings(state.carMesh3.bindings)
-    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
-    sg.draw(0, state.carMesh3.indexCount, 1)
+    drawVehicle(proj, view, carModel, state.cameraPos)
 
   sg.endPass()
   
@@ -963,6 +1058,19 @@ proc frame() {.cdecl.} =
     sdtx.color3f(1.0, 1.0, 1.0)
     sdtx.pos(dashX, dashY + 3)
     sdtx.puts(&"GEAR {state.debugGear}")
+
+    # --- AI Labels ---
+    for ai in state.aiCars:
+      let (screenPos, visible) = worldToScreen(ai.position + vec3(0, 2.5, 0), proj, view, canvasW, canvasH)
+      if visible:
+        sdtx.pos(screenPos.x / 8.0, screenPos.y / 8.0) # sdtx uses character grid (usually 8x8)
+        case ai.difficulty:
+        of Difficulty.Easy: sdtx.color3f(0.5, 1.0, 0.5)
+        of Difficulty.Medium: sdtx.color3f(1.0, 1.0, 0.5)
+        of Difficulty.Hard: sdtx.color3f(1.0, 0.5, 0.5)
+        sdtx.puts(&"{ai.name}")
+        sdtx.pos(screenPos.x / 8.0, (screenPos.y / 8.0) + 1.0)
+        sdtx.puts(&"[{ai.difficulty}]")
 
   sdtx.draw()
   sg.endPass()

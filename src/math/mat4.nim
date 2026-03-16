@@ -41,12 +41,6 @@ proc `*`*(m0: Mat4, m1: Mat4): Mat4 =
         m0.m[2][row] * m1.m[col][2] +
         m0.m[3][row] * m1.m[col][3]
 
-proc `*`*(m: Mat4, v: vec3.Vec3): vec3.Vec3 =
-  let w = m.m[0][3] * v.x + m.m[1][3] * v.y + m.m[2][3] * v.z + m.m[3][3]
-  result.x = (m.m[0][0] * v.x + m.m[1][0] * v.y + m.m[2][0] * v.z + m.m[3][0]) / w
-  result.y = (m.m[0][1] * v.x + m.m[1][1] * v.y + m.m[2][1] * v.z + m.m[3][1]) / w
-  result.z = (m.m[0][2] * v.x + m.m[1][2] * v.y + m.m[2][2] * v.z + m.m[3][2]) / w
-
 proc persp*(fov: float32, aspect: float32, near: float32, far: float32): Mat4 =
   result = identity()
   let t = math.tan(fov * (math.PI / 360f))
@@ -132,3 +126,12 @@ proc fromCols*(right, up, forward, translation: Vec3): Mat4 =
 
   # Set the bottom row for a standard affine transformation matrix
   result.m[3][3] = 1.0
+
+proc `*`*(m: Mat4, v: Vec3): Vec3 =
+  let x = v.x * m.m[0][0] + v.y * m.m[1][0] + v.z * m.m[2][0] + m.m[3][0]
+  let y = v.x * m.m[0][1] + v.y * m.m[1][1] + v.z * m.m[2][1] + m.m[3][1]
+  let z = v.x * m.m[0][2] + v.y * m.m[1][2] + v.z * m.m[2][2] + m.m[3][2]
+  let w = v.x * m.m[0][3] + v.y * m.m[1][3] + v.z * m.m[2][3] + m.m[3][3]
+  if w != 0.0 and w != 1.0:
+    return vec3(x / w, y / w, z / w)
+  return vec3(x, y, z)
