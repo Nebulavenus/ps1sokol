@@ -759,27 +759,93 @@ proc frame() {.cdecl.} =
   
   sg.beginPass(Pass(action: passAction, swapchain: sglue.swapchain()))
   drawPostfx()
-  sdtx.canvas(sapp.widthf()*0.5, sapp.heightf()*0.5)
-  sdtx.origin(1.0, 1.0)
-  sdtx.home()
-  sdtx.color3f(1.0, 1.0, 0.0)
-  sdtx.puts((&"Speed: {state.debugSpeed:5.2f}\n").cstring)
-  sdtx.puts((&"RPM: {state.debugRpm.int32}\n").cstring)
-  sdtx.puts((&"Gear: {state.debugGear}\n").cstring)
-  sdtx.puts("\n")
-  sdtx.color3f(0.0, 1.0, 1.0)
-  sdtx.puts((&"Lap: {state.lapCount}\n").cstring)
-  sdtx.puts((&"Checkpoint: {state.currentCheckpointIdx + 1}/{state.checkpoints.len}\n").cstring)
-  let currentLapTime = state.time - state.lapStartTime
-  sdtx.puts((&"Time: {currentLapTime:5.2f}\n").cstring)
-  sdtx.puts((&"Last Lap: {state.lastLapTime:5.2f}\n").cstring)
-  sdtx.puts((&"Best Lap: {state.bestLapTime:5.2f}\n").cstring)
-  sdtx.puts("\n")
-  sdtx.color3f(1.0, 0.5, 0.0)
-  sdtx.puts((&"Music: {getCurrentTrackFilename()}\n").cstring)
-  sdtx.puts((&"Vol: {getMusicVolume()*100:3.0f}%\n").cstring)
-  sdtx.puts("\n")
   
+  # Fix logical resolution at 320x240 so the HUD scales with the window
+  # but remains visually consistent (40x30 character grid)
+  let canvasW = 320.0f
+  let canvasH = 240.0f
+  sdtx.canvas(canvasW, canvasH)
+  
+  let gridW = 40.0f
+  let gridH = 30.0f
+
+  # --- TOP LEFT: MISSION CONTROL ---
+  sdtx.pos(1, 1)
+  sdtx.color3f(0.2, 0.8, 1.0)
+  sdtx.puts(">> RACE DATA")
+  sdtx.color3f(1.0, 1.0, 1.0)
+  sdtx.pos(1, 2)
+  sdtx.puts(&"LAP  {state.lapCount+1:02}")
+  sdtx.pos(1, 3)
+  let currentLapTime = state.time - state.lapStartTime
+  sdtx.puts(&"TIME {currentLapTime:5.2f}")
+  sdtx.pos(1, 4)
+  sdtx.puts(&"BEST {state.bestLapTime:5.2f}")
+  
+  # Checkpoint progress bar
+  sdtx.pos(1, 6)
+  sdtx.color3f(0.2, 1.0, 0.4)
+  let cpTotal = state.checkpoints.len
+  if cpTotal > 0:
+    let cpCurrent = state.currentCheckpointIdx + 1
+    var cpBar = ""
+    # Use a shorter bar if it's too many checkpoints
+    let barMax = 15
+    for i in 1..barMax:
+      let progress = i.float / barMax.float
+      let cpProgress = cpCurrent.float / cpTotal.float
+      if progress < cpProgress: cpBar.add("=")
+      elif progress - (1.0/barMax.float) < cpProgress: cpBar.add(">")
+      else: cpBar.add("-")
+    sdtx.puts(&"POS [{cpBar}] {cpCurrent}/{cpTotal}")
+
+  # --- TOP RIGHT: AUDIO SYSTEM (Anchored to Right) ---
+  let audioX = gridW - 16.0
+  sdtx.pos(audioX, 1)
+  sdtx.color3f(1.0, 0.6, 0.0)
+  sdtx.puts(">> AUDIO SYSTEM")
+  sdtx.color3f(1.0, 1.0, 1.0)
+  sdtx.pos(audioX, 2)
+  let trackName = getCurrentTrackFilename()
+  let displayName = if trackName.len > 14: trackName[0..11] & ".." else: trackName
+  sdtx.puts(displayName.cstring)
+  sdtx.pos(audioX, 3)
+  sdtx.puts(&"VOL {getMusicVolume()*100:3.0f}%")
+
+  # --- BOTTOM RIGHT: VEHICLE TELEMETRY (Anchored to Bottom-Right) ---
+  let dashX = gridW - 16.0
+  let dashY = gridH - 5.0
+  
+  sdtx.pos(dashX, dashY)
+  sdtx.color3f(1.0, 0.2, 0.2)
+  sdtx.puts(">> TELEMETRY")
+  
+  # Speed
+  sdtx.color3f(1.0, 1.0, 1.0)
+  sdtx.pos(dashX, dashY + 1)
+  sdtx.puts(&"SPD {state.debugSpeed:5.1f} KM/H")
+  
+  # RPM
+  sdtx.pos(dashX, dashY + 2)
+  let rpm = state.debugRpm
+  let rpmPct = clamp((rpm - 1000.0) / 5000.0, 0.0, 1.0)
+  let rpmBars = int(rpmPct * 10)
+  var rpmStr = ""
+  for i in 0..<10:
+    if i < rpmBars: rpmStr.add("|")
+    else: rpmStr.add(".")
+  
+  # Color-coded RPM
+  if rpmPct > 0.8: sdtx.color3f(1.0, 0.0, 0.0) # Redline
+  elif rpmPct > 0.5: sdtx.color3f(1.0, 1.0, 0.0) # Mid
+  else: sdtx.color3f(0.0, 1.0, 0.0) # Low
+  sdtx.puts(&"RPM [{rpmStr}]")
+  
+  # Gear
+  sdtx.color3f(1.0, 1.0, 1.0)
+  sdtx.pos(dashX, dashY + 3)
+  sdtx.puts(&"GEAR {state.debugGear}")
+
   sdtx.draw()
   sg.endPass()
   sg.commit()
