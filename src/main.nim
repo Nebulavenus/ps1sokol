@@ -479,6 +479,59 @@ proc drawShadow(proj, view: Mat4) =
   sg.applyUniforms(spr.ubFsParams, sg.Range(addr: fsParams.addr, size: fsParams.sizeof))
   sg.draw(0, 6, 1)
 
+proc restartLevel(state: var State) =
+  state.player.position = vec3(0.0, 12, 25.0)
+  state.player.velocity = vec3(0, 0, 0)
+  state.player.yaw = 0.0
+  state.player.angularVelocity = 0.0
+  state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+  state.currentCheckpointIdx = 0
+  state.lapCount = 0
+  state.lapStartTime = state.time
+  state.lastLapTime = 0.0
+  state.replayBuffer = @[]
+  state.isReplaying = false
+  echo "Level Restarted"
+
+proc loadLevel*(state: var State, fs: var RuntimeFS, mapDir: string) =
+  # Clear level-specific resources if any
+  # (For now, let's just clear the meshes Table and recreate them)
+  # Actually, clearResources is currently destructive to everything.
+  # We'll just destroy the specific track meshes for now if they exist.
+  
+  echo &"Loading level: {mapDir}"
+  
+  let aoParams = AOBakeParams(numRays: 64, maxDistance: 2.0, intensity: 1.0, bias: 0.001)
+  let pointSmp = sg.makeSampler(sg.SamplerDesc(minFilter: filterNearest, magFilter: filterNearest))
+  
+  # Load textures
+  let trackTexture1 = loadTexture(state, fs, mapDir/"track_road.qoi")
+  let trackTexture2 = loadTexture(state, fs, mapDir/"track_shape.qoi")
+  let trackTexture3 = loadTexture(state, fs, mapDir/"track_trees.qoi")
+  
+  # Load meshes
+  state.trackMesh1 = loadAndProcessMesh(state, fs, mapDir/"track_road.ply", aoParams, trackTexture1, pointSmp)
+  state.trackMesh2 = loadAndProcessMesh(state, fs, mapDir/"track_shape.ply", aoParams, trackTexture2, pointSmp)
+  state.trackMesh3 = loadAndProcessMesh(state, fs, mapDir/"track_trees.ply", aoParams, trackTexture3, pointSmp)
+  state.trackMesh4 = loadAndProcessMesh(state, fs, mapDir/"track_barrier.ply", aoParams, trackTexture1, pointSmp)
+  
+  # Load collision
+  (state.roadCollisionVertices, state.roadCollisionIndices) = loadAndProcessMeshCollision(fs, mapDir/"track_road.ply")
+  state.roadGrid = initUniformGrid(state.roadCollisionVertices, 64)
+  populateGrid(state.roadGrid, state.roadCollisionVertices, state.roadCollisionIndices)
+  
+  (state.barrierCollisionVertices, state.barrierCollisionIndices) = loadAndProcessMeshCollision(fs, mapDir/"track_barrier.ply")
+  state.barrierGrid = initUniformGrid(state.barrierCollisionVertices, 64)
+  populateGrid(state.barrierGrid, state.barrierCollisionVertices, state.barrierCollisionIndices)
+  
+  # Gameplay systems initialization
+  state.pathNodes = extractPathFromRoadMesh(state.roadCollisionVertices, state.roadCollisionIndices)
+  state.checkpoints = @[]
+  for i in countup(0, state.pathNodes.len - 1, 4):
+    state.checkpoints.add(Checkpoint(pos: state.pathNodes[i], radius: 18.0))
+  
+  restartLevel(state)
+
 proc init() {.cdecl.} =
   ASSETS_FS = newRuntimeFS("assets")
   state.gameHasFocus = not defined(emscripten)
@@ -517,56 +570,39 @@ proc init() {.cdecl.} =
   initPostfxPipeline()
   initScreenQuad()
   randomize()
-  let aoParams = AOBakeParams(numRays: 64, maxDistance: 2.0, intensity: 1.0, bias: 0.001)
+  
   state.aoShadowStrength = 1.0
   state.skyLightColor = vec3(0.4, 0.5, 0.8)
   state.skyLightIntensity = 0.0
   state.groundLightColor = vec3(0.6, 0.4, 0.3)
   state.groundLightIntensity = 0.0
-  let pointSmp = sg.makeSampler(sg.SamplerDesc(minFilter: filterNearest, magFilter: filterNearest))
+  
   loadMusicPlaylist(ASSETS_FS, "music")
-  let trackTexture1 = loadTexture(state, ASSETS_FS, "map2"/"track_road.qoi")
-  let trackTexture2 = loadTexture(state, ASSETS_FS, "map2"/"track_shape.qoi")
-  let trackTexture3 = loadTexture(state, ASSETS_FS, "map2"/"track_trees.qoi")
+  
   let carTexture = loadTexture(state, ASSETS_FS, "car"/"trueno.qoi")
-  state.trackMesh1 = loadAndProcessMesh(state, ASSETS_FS, "map2"/"track_road.ply", aoParams, trackTexture1, pointSmp)
-  state.trackMesh2 = loadAndProcessMesh(state, ASSETS_FS, "map2"/"track_shape.ply", aoParams, trackTexture2, pointSmp)
-  state.trackMesh3 = loadAndProcessMesh(state, ASSETS_FS, "map2"/"track_trees.ply", aoParams, trackTexture3, pointSmp)
-  state.trackMesh4 = loadAndProcessMesh(state, ASSETS_FS, "map2"/"track_barrier.ply", aoParams, trackTexture1, pointSmp)
+  let aoParams = AOBakeParams(numRays: 64, maxDistance: 2.0, intensity: 1.0, bias: 0.001)
+  let pointSmp = sg.makeSampler(sg.SamplerDesc(minFilter: filterNearest, magFilter: filterNearest))
+  
   state.carMesh1 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno.ply", aoParams, carTexture, pointSmp)
   state.carMesh2 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_back.ply", aoParams, carTexture, pointSmp)
   state.carMesh3 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_front.ply", aoParams, carTexture, pointSmp)
-  (state.roadCollisionVertices, state.roadCollisionIndices) = loadAndProcessMeshCollision(ASSETS_FS, "map2"/"track_road.ply")
-  state.roadGrid = initUniformGrid(state.roadCollisionVertices, 64)
-  populateGrid(state.roadGrid, state.roadCollisionVertices, state.roadCollisionIndices)
-  (state.barrierCollisionVertices, state.barrierCollisionIndices) = loadAndProcessMeshCollision(ASSETS_FS, "map2"/"track_barrier.ply")
-  state.barrierGrid = initUniformGrid(state.barrierCollisionVertices, 64)
-  populateGrid(state.barrierGrid, state.barrierCollisionVertices, state.barrierCollisionIndices)
-  state.player.position = vec3(0.0, 12, 25.0)
-  state.player.velocity = vec3(0, 0, 0)
-  state.player.yaw = 0.0
-  state.player.angularVelocity = 0.0
-  state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+  
+  loadLevel(state, ASSETS_FS, "map2")
+  
   state.cameraMode = CameraMode.Follow
   state.cameraPos = vec3(0.0, 10.0, 2.0)
   state.cameraOffsetY = 5.0
   state.cameraTarget = state.player.position
   state.lastEmitPos = state.player.position
 
-  # Phase 3: Gameplay Systems Initialization
-  state.pathNodes = extractPathFromRoadMesh(state.roadCollisionVertices, state.roadCollisionIndices)
-  state.checkpoints = @[]
-  # Only create checkpoints every 4 nodes (the original spine nodes) to avoid HUD spam
-  # and ensure they are spaced reasonably (~20 units)
-  for i in countup(0, state.pathNodes.len - 1, 4):
-    state.checkpoints.add(Checkpoint(pos: state.pathNodes[i], radius: 18.0))
-  
-  state.lapStartTime = state.time
-  state.bestLapTime = 0.0
+  state.gameState = GameState.MainMenu
+  state.menu.selectedItem = 0
+  state.menu.itemCount = 3 # START, CONTROLS, QUIT
 
 proc frame() {.cdecl.} =
   let dt = sapp.frameDuration()
   state.time += dt
+  
   if not state.gameHasFocus:
     sg.beginPass(Pass(action: passAction, swapchain: sglue.swapchain()))
     sdtx.canvas(sapp.widthf()*0.5, sapp.heightf()*0.5)
@@ -577,140 +613,152 @@ proc frame() {.cdecl.} =
     sg.endPass()
     sg.commit()
     return
-  block VehiclePhysics:
-    const engineForce = 25.0
-    const brakeForce = 20.0
-    const drag = 0.8
-    const angularDrag = 1.1
-    const baseGrip = 0.95
-    const driftGripMultiplier = 0.3
-    const driftTurningMultiplier = 2.2
-    const lowSpeedTurnTorque = 100.0
-    const highSpeedTurnTorque = 40.0
-    const speedForMaxTurnDampening = 40.0
-    let prevVelocity = state.player.velocity
-    let forwardDir = state.player.rotation * vec3(0, 0, -1)
-    if state.input.accelerate:
-      state.player.velocity += forwardDir * engineForce * dt
-    if state.input.brake:
-      if len(state.player.velocity) > 5.0:
-        state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
-      else:
-        state.player.velocity -= forwardDir * engineForce * dt
-    let currentSpeed1 = len(state.player.velocity)
-    let turnDampeningFactor = clamp(currentSpeed1 / speedForMaxTurnDampening, 0.0, 1.0)
-    var effectiveTurningTorque = lerp(lowSpeedTurnTorque, highSpeedTurnTorque, turnDampeningFactor)
-    if state.input.drift:
-      effectiveTurningTorque *= driftTurningMultiplier
-    if state.input.turnLeft:
-      state.player.angularVelocity += effectiveTurningTorque * dt
-    if state.input.turnRight:
-      state.player.angularVelocity -= effectiveTurningTorque * dt
-    var currentDrag = drag
-    if state.input.drift:
-      currentDrag *= 1.5
-    state.player.velocity = state.player.velocity * (1.0 - (currentDrag * dt))
-    state.player.angularVelocity = state.player.angularVelocity * (1.0 - (angularDrag * dt))
-    state.player.yaw += state.player.angularVelocity * dt
-    var nextPosition = state.player.position + state.player.velocity * dt
-    state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
-    let collisionInfo = checkBarrierCollisions(state, nextPosition, state.player.rotation)
-    if collisionInfo.collided:
-      nextPosition += collisionInfo.pushOut
-      # Manual velocity reflection
-      let wallNormal = norm(collisionInfo.pushOut)
-      let velAlongNormal = dot(state.player.velocity, wallNormal)
-      if velAlongNormal < 0:
-        state.player.velocity = state.player.velocity * 0.95
-        state.player.velocity -= wallNormal * velAlongNormal * 1.05
-    state.player.position = nextPosition
-    var surfaceUp = vec3.up()
-    let surfaceInfoOpt = getSurfaceInfo(state, state.player.position)
-    if surfaceInfoOpt.isSome:
-      let surfaceInfo = surfaceInfoOpt.get()
-      state.player.position.y = surfaceInfo.pos.y + 0.9
-      surfaceUp = surfaceInfo.normal
-    # Respawn if falling or OOB
-    if state.player.position.y < -50.0 or surfaceInfoOpt.isNone:
-      # Find last checkpoint passed
-      let lastCpIdx = (state.currentCheckpointIdx + state.checkpoints.len - 1) mod state.checkpoints.len
-      let respawnPos = state.checkpoints[lastCpIdx].pos
-      state.player.position = respawnPos + vec3(0, 2, 0)
-      state.player.velocity = vec3(0, 0, 0)
-      # Orient toward next checkpoint
-      let toNext = norm(state.checkpoints[state.currentCheckpointIdx].pos - respawnPos)
-      state.player.yaw = (arctan2(toNext.x, toNext.z) + PI) * (180.0 / PI)
+
+  if state.gameState == GameState.Playing:
+    # ... physics and logic ...
+    block VehiclePhysics:
+      const engineForce = 25.0
+      const brakeForce = 20.0
+      const drag = 0.8
+      const angularDrag = 1.1
+      const baseGrip = 0.95
+      const driftGripMultiplier = 0.3
+      const driftTurningMultiplier = 2.2
+      const lowSpeedTurnTorque = 100.0
+      const highSpeedTurnTorque = 40.0
+      const speedForMaxTurnDampening = 40.0
+      let prevVelocity = state.player.velocity
+      let forwardDir = state.player.rotation * vec3(0, 0, -1)
+      if state.input.accelerate:
+        state.player.velocity += forwardDir * engineForce * dt
+      if state.input.brake:
+        if len(state.player.velocity) > 5.0:
+          state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
+        else:
+          state.player.velocity -= forwardDir * engineForce * dt
+      let currentSpeed1 = len(state.player.velocity)
+      let turnDampeningFactor = clamp(currentSpeed1 / speedForMaxTurnDampening, 0.0, 1.0)
+      var effectiveTurningTorque = lerp(lowSpeedTurnTorque, highSpeedTurnTorque, turnDampeningFactor)
+      if state.input.drift:
+        effectiveTurningTorque *= driftTurningMultiplier
+      if state.input.turnLeft:
+        state.player.angularVelocity += effectiveTurningTorque * dt
+      if state.input.turnRight:
+        state.player.angularVelocity -= effectiveTurningTorque * dt
+      var currentDrag = drag
+      if state.input.drift:
+        currentDrag *= 1.5
+      state.player.velocity = state.player.velocity * (1.0 - (currentDrag * dt))
+      state.player.angularVelocity = state.player.angularVelocity * (1.0 - (angularDrag * dt))
+      state.player.yaw += state.player.angularVelocity * dt
+      var nextPosition = state.player.position + state.player.velocity * dt
       state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
-
-
-    let currentSpeed = len(state.player.velocity)
-    let carAccel = (currentSpeed - len(prevVelocity)) / dt
-    updateEngineSound(currentSpeed, carAccel, state.input.drift, state.debugSpeed, state.debugRpm, state.debugGear)
-    var currentGrip = baseGrip
-    if state.input.drift:
-      currentGrip *= driftGripMultiplier
-    let velocityDirection = if currentSpeed > 0.01: norm(state.player.velocity) else: forwardDir
-    let newVelocityDir = norm(lerpV(velocityDirection, forwardDir, clamp(currentGrip * dt, 0.0, 1.0)))
-    if currentSpeed > 0.01:
-      state.player.velocity = newVelocityDir * currentSpeed
-    else:
-      state.player.velocity = vec3(0,0,0)
-    let prevForward = state.player.rotation * vec3(0, 0, -1)
-    let yawRot = rotate(state.player.angularVelocity * dt, surfaceUp)
-    let newForward = yawRot * prevForward
-    let newRight = norm(cross(newForward, surfaceUp))
-    let finalForward = norm(cross(surfaceUp, newRight))
-    state.player.rotation = fromCols(newRight, surfaceUp, finalForward, vec3(0,0,0))
-    
-    if state.input.drift:
-      let carRot = state.player.rotation
-      let distMoved = len(state.player.position - state.lastEmitPos)
-      let numSteps = clamp(int(distMoved / 0.05), 1, 15) # Smaller steps for better density
-      for s in 0 ..< numSteps:
-        let t = s.float / numSteps.float
-        let lerpPos = vec3.lerpV(state.lastEmitPos, state.player.position, t)
-        let leftEmitPos = lerpPos + (carRot * vec3(-0.8, -0.5, 1.2))
-        let rightEmitPos = lerpPos + (carRot * vec3(0.8, -0.5, 1.2))
-        let smokeVel = (carRot * vec3(0, 0.5, 1.0)) * 2.0
-        let randVel = vec3(rand(-0.5..0.5), rand(0.0..0.5), rand(-0.5..0.5))
-        emitParticle(leftEmitPos, smokeVel + randVel, packColor(200, 200, 200, 150), 1.0)
-        emitParticle(rightEmitPos, smokeVel + randVel, packColor(200, 200, 200, 150), 1.0)
-    
-    let exhaustPos = state.player.position + (state.player.rotation * vec3(-0.6, -0.4, 1.5))
-    let exhaustVel = (state.player.rotation * vec3(0, 0.2, 0.5)) + vec3(rand(-0.1..0.1), rand(0.1..0.2), rand(-0.1..0.1))
-    emitParticle(exhaustPos, exhaustVel, packColor(150, 150, 150, 100), 0.5)
-    state.lastEmitPos = state.player.position
-
-  # Phase 3: Gameplay Systems Update
-  block GameplayLogic:
-    if state.checkpoints.len > 0:
-      let nextCp = state.checkpoints[state.currentCheckpointIdx]
-      if len(state.player.position - nextCp.pos) < nextCp.radius:
-        state.currentCheckpointIdx = (state.currentCheckpointIdx + 1) mod state.checkpoints.len
-        if state.currentCheckpointIdx == 0:
-          # Completed a lap
-          state.lapCount += 1
-          state.lastLapTime = state.time - state.lapStartTime
-          if state.bestLapTime == 0.0 or state.lastLapTime < state.bestLapTime:
-            state.bestLapTime = state.lastLapTime
-          state.lapStartTime = state.time
-
-    # Replay Recording / Playback
-    if state.isReplaying:
-      if state.replayBuffer.len > 0:
-        let frame = state.replayBuffer[state.replayIndex]
-        state.player.position = frame.pos
-        state.player.yaw = frame.yaw
+      let collisionInfo = checkBarrierCollisions(state, nextPosition, state.player.rotation)
+      if collisionInfo.collided:
+        nextPosition += collisionInfo.pushOut
+        # Manual velocity reflection
+        let wallNormal = norm(collisionInfo.pushOut)
+        let velAlongNormal = dot(state.player.velocity, wallNormal)
+        if velAlongNormal < 0:
+          state.player.velocity = state.player.velocity * 0.95
+          state.player.velocity -= wallNormal * velAlongNormal * 1.05
+      state.player.position = nextPosition
+      var surfaceUp = vec3.up()
+      let surfaceInfoOpt = getSurfaceInfo(state, state.player.position)
+      if surfaceInfoOpt.isSome:
+        let surfaceInfo = surfaceInfoOpt.get()
+        state.player.position.y = surfaceInfo.pos.y + 0.9
+        surfaceUp = surfaceInfo.normal
+      # Respawn if falling or OOB
+      if state.player.position.y < -50.0 or surfaceInfoOpt.isNone:
+        # Find last checkpoint passed
+        let lastCpIdx = (state.currentCheckpointIdx + state.checkpoints.len - 1) mod state.checkpoints.len
+        let respawnPos = state.checkpoints[lastCpIdx].pos
+        state.player.position = respawnPos + vec3(0, 2, 0)
+        state.player.velocity = vec3(0, 0, 0)
+        # Orient toward next checkpoint
+        let toNext = norm(state.checkpoints[state.currentCheckpointIdx].pos - respawnPos)
+        state.player.yaw = (arctan2(toNext.x, toNext.z) + PI) * (180.0 / PI)
         state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
-        state.replayIndex = (state.replayIndex + 1) mod state.replayBuffer.len
-    else:
-      state.replayBuffer.add(ReplayFrame(pos: state.player.position, yaw: state.player.yaw))
-      if state.replayBuffer.len > 10000: # Limit buffer size
-        state.replayBuffer.delete(0)
 
-  updateParticles(dt)
-  updateCamera(state, dt)
-  audioGenerateSamples()
+
+      let currentSpeed = len(state.player.velocity)
+      let carAccel = (currentSpeed - len(prevVelocity)) / dt
+      updateEngineSound(currentSpeed, carAccel, state.input.drift, state.debugSpeed, state.debugRpm, state.debugGear)
+      var currentGrip = baseGrip
+      if state.input.drift:
+        currentGrip *= driftGripMultiplier
+      let velocityDirection = if currentSpeed > 0.01: norm(state.player.velocity) else: forwardDir
+      let newVelocityDir = norm(lerpV(velocityDirection, forwardDir, clamp(currentGrip * dt, 0.0, 1.0)))
+      if currentSpeed > 0.01:
+        state.player.velocity = newVelocityDir * currentSpeed
+      else:
+        state.player.velocity = vec3(0,0,0)
+      let prevForward = state.player.rotation * vec3(0, 0, -1)
+      let yawRot = rotate(state.player.angularVelocity * dt, surfaceUp)
+      let newForward = yawRot * prevForward
+      let newRight = norm(cross(newForward, surfaceUp))
+      let finalForward = norm(cross(surfaceUp, newRight))
+      state.player.rotation = fromCols(newRight, surfaceUp, finalForward, vec3(0,0,0))
+      
+      if state.input.drift:
+        let carRot = state.player.rotation
+        let distMoved = len(state.player.position - state.lastEmitPos)
+        let numSteps = clamp(int(distMoved / 0.05), 1, 15) # Smaller steps for better density
+        for s in 0 ..< numSteps:
+          let t = s.float / numSteps.float
+          let lerpPos = vec3.lerpV(state.lastEmitPos, state.player.position, t)
+          let leftEmitPos = lerpPos + (carRot * vec3(-0.8, -0.5, 1.2))
+          let rightEmitPos = lerpPos + (carRot * vec3(0.8, -0.5, 1.2))
+          let smokeVel = (carRot * vec3(0, 0.5, 1.0)) * 2.0
+          let randVel = vec3(rand(-0.5..0.5), rand(0.0..0.5), rand(-0.5..0.5))
+          emitParticle(leftEmitPos, smokeVel + randVel, packColor(200, 200, 200, 150), 1.0)
+          emitParticle(rightEmitPos, smokeVel + randVel, packColor(200, 200, 200, 150), 1.0)
+      
+      let exhaustPos = state.player.position + (state.player.rotation * vec3(-0.6, -0.4, 1.5))
+      let exhaustVel = (state.player.rotation * vec3(0, 0.2, 0.5)) + vec3(rand(-0.1..0.1), rand(0.1..0.2), rand(-0.1..0.1))
+      emitParticle(exhaustPos, exhaustVel, packColor(150, 150, 150, 100), 0.5)
+      state.lastEmitPos = state.player.position
+
+    # Phase 3: Gameplay Systems Update
+    block GameplayLogic:
+      if state.checkpoints.len > 0:
+        let nextCp = state.checkpoints[state.currentCheckpointIdx]
+        if len(state.player.position - nextCp.pos) < nextCp.radius:
+          state.currentCheckpointIdx = (state.currentCheckpointIdx + 1) mod state.checkpoints.len
+          if state.currentCheckpointIdx == 0:
+            # Completed a lap
+            state.lapCount += 1
+            state.lastLapTime = state.time - state.lapStartTime
+            if state.bestLapTime == 0.0 or state.lastLapTime < state.bestLapTime:
+              state.bestLapTime = state.lastLapTime
+            state.lapStartTime = state.time
+
+      # Replay Recording / Playback
+      if state.isReplaying:
+        if state.replayBuffer.len > 0:
+          let frame = state.replayBuffer[state.replayIndex]
+          state.player.position = frame.pos
+          state.player.yaw = frame.yaw
+          state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+          state.replayIndex = (state.replayIndex + 1) mod state.replayBuffer.len
+      else:
+        state.replayBuffer.add(ReplayFrame(pos: state.player.position, yaw: state.player.yaw))
+        if state.replayBuffer.len > 10000: # Limit buffer size
+          state.replayBuffer.delete(0)
+
+    updateParticles(dt)
+    if state.gameState == GameState.Playing:
+      updateCamera(state, dt)
+    elif state.gameState == GameState.MainMenu:
+      # Simple rotating camera for Main Menu
+      let radius = 15.0f
+      let speed = 0.2f
+      state.cameraPos = state.player.position + vec3(cos(state.time * speed) * radius, 5.0, sin(state.time * speed) * radius)
+      state.cameraTarget = state.player.position
+    
+    audioGenerateSamples()
+
   let fsParams = computeFsParams()
   let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 150.0f)
   let view = lookat(state.cameraPos, state.cameraTarget, vec3.up())
@@ -760,91 +808,161 @@ proc frame() {.cdecl.} =
   sg.beginPass(Pass(action: passAction, swapchain: sglue.swapchain()))
   drawPostfx()
   
-  # Fix logical resolution at 320x240 so the HUD scales with the window
-  # but remains visually consistent (40x30 character grid)
+  # --- UI ---
   let canvasW = 320.0f
   let canvasH = 240.0f
   sdtx.canvas(canvasW, canvasH)
-  
   let gridW = 40.0f
   let gridH = 30.0f
 
-  # --- TOP LEFT: MISSION CONTROL ---
-  sdtx.pos(1, 1)
-  sdtx.color3f(0.2, 0.8, 1.0)
-  sdtx.puts(">> RACE DATA")
-  sdtx.color3f(1.0, 1.0, 1.0)
-  sdtx.pos(1, 2)
-  sdtx.puts(&"LAP  {state.lapCount+1:02}")
-  sdtx.pos(1, 3)
-  let currentLapTime = state.time - state.lapStartTime
-  sdtx.puts(&"TIME {currentLapTime:5.2f}")
-  sdtx.pos(1, 4)
-  sdtx.puts(&"BEST {state.bestLapTime:5.2f}")
-  
-  # Checkpoint progress bar
-  sdtx.pos(1, 6)
-  sdtx.color3f(0.2, 1.0, 0.4)
-  let cpTotal = state.checkpoints.len
-  if cpTotal > 0:
-    let cpCurrent = state.currentCheckpointIdx + 1
-    var cpBar = ""
-    # Use a shorter bar if it's too many checkpoints
-    let barMax = 15
-    for i in 1..barMax:
-      let progress = i.float / barMax.float
-      let cpProgress = cpCurrent.float / cpTotal.float
-      if progress < cpProgress: cpBar.add("=")
-      elif progress - (1.0/barMax.float) < cpProgress: cpBar.add(">")
-      else: cpBar.add("-")
-    sdtx.puts(&"POS [{cpBar}] {cpCurrent}/{cpTotal}")
+  if state.gameState == GameState.MainMenu:
+    let menuX = 12.0f
+    let menuY = 10.0f
+    sdtx.pos(menuX, menuY - 4)
+    sdtx.color3f(0.2, 0.8, 1.0)
+    sdtx.puts("=== PS1 SOKOL RACER ===")
+    
+    let items = ["START GAME", "CONTROLS", "QUIT"]
+    for i, item in items:
+      sdtx.pos(menuX, menuY + i.float * 2.0)
+      if i == state.menu.selectedItem:
+        sdtx.color3f(1.0, 1.0, 1.0)
+        sdtx.puts(&"> {item}")
+      else:
+        sdtx.color3f(0.5, 0.5, 0.5)
+        sdtx.puts(&"  {item}")
 
-  # --- TOP RIGHT: AUDIO SYSTEM (Anchored to Right) ---
-  let audioX = gridW - 16.0
-  sdtx.pos(audioX, 1)
-  sdtx.color3f(1.0, 0.6, 0.0)
-  sdtx.puts(">> AUDIO SYSTEM")
-  sdtx.color3f(1.0, 1.0, 1.0)
-  sdtx.pos(audioX, 2)
-  let trackName = getCurrentTrackFilename()
-  let displayName = if trackName.len > 14: trackName[0..11] & ".." else: trackName
-  sdtx.puts(displayName.cstring)
-  sdtx.pos(audioX, 3)
-  sdtx.puts(&"VOL {getMusicVolume()*100:3.0f}%")
+  elif state.gameState == GameState.Paused:
+    let menuX = 14.0f
+    let menuY = 10.0f
+    sdtx.pos(menuX, menuY - 2)
+    sdtx.color3f(1.0, 1.0, 0.0)
+    sdtx.puts("=== PAUSED ===")
+    
+    let items = ["RESUME", "RESTART", "MUSIC VOL", "SFX VOL", "CONTROLS", "QUIT"]
+    for i, item in items:
+      sdtx.pos(menuX, menuY + i.float * 2.0)
+      if i == state.menu.selectedItem:
+        sdtx.color3f(1.0, 1.0, 1.0)
+        sdtx.puts(&"> {item}")
+      else:
+        sdtx.color3f(0.5, 0.5, 0.5)
+        sdtx.puts(&"  {item}")
+      
+      if item == "MUSIC VOL":
+        sdtx.puts(&" {getMusicVolume()*100:3.0f}%")
+      elif item == "SFX VOL":
+        sdtx.puts(&" {getSfxVolume()*100:3.0f}%")
 
-  # --- BOTTOM RIGHT: VEHICLE TELEMETRY (Anchored to Bottom-Right) ---
-  let dashX = gridW - 16.0
-  let dashY = gridH - 5.0
-  
-  sdtx.pos(dashX, dashY)
-  sdtx.color3f(1.0, 0.2, 0.2)
-  sdtx.puts(">> TELEMETRY")
-  
-  # Speed
-  sdtx.color3f(1.0, 1.0, 1.0)
-  sdtx.pos(dashX, dashY + 1)
-  sdtx.puts(&"SPD {state.debugSpeed:5.1f} KM/H")
-  
-  # RPM
-  sdtx.pos(dashX, dashY + 2)
-  let rpm = state.debugRpm
-  let rpmPct = clamp((rpm - 1000.0) / 5000.0, 0.0, 1.0)
-  let rpmBars = int(rpmPct * 10)
-  var rpmStr = ""
-  for i in 0..<10:
-    if i < rpmBars: rpmStr.add("|")
-    else: rpmStr.add(".")
-  
-  # Color-coded RPM
-  if rpmPct > 0.8: sdtx.color3f(1.0, 0.0, 0.0) # Redline
-  elif rpmPct > 0.5: sdtx.color3f(1.0, 1.0, 0.0) # Mid
-  else: sdtx.color3f(0.0, 1.0, 0.0) # Low
-  sdtx.puts(&"RPM [{rpmStr}]")
-  
-  # Gear
-  sdtx.color3f(1.0, 1.0, 1.0)
-  sdtx.pos(dashX, dashY + 3)
-  sdtx.puts(&"GEAR {state.debugGear}")
+  elif state.gameState == GameState.ControlsMenu:
+    let menuX = 4.0f
+    let menuY = 4.0f
+    sdtx.pos(menuX, menuY)
+    sdtx.color3f(1.0, 1.0, 0.0)
+    sdtx.puts("=== CONTROLS ===")
+    
+    sdtx.color3f(1.0, 1.0, 1.0)
+    let controls = [
+      ("W / UP", "ACCELERATE"),
+      ("S / DOWN", "BRAKE / REVERSE"),
+      ("A / LEFT", "STEER LEFT"),
+      ("D / RIGHT", "STEER RIGHT"),
+      ("SPACE", "DRIFT"),
+      ("R", "RESPAWN AT CHECKPOINT"),
+      ("C", "TOGGLE CAMERA"),
+      ("ESC / TAB", "PAUSE MENU"),
+      ("M", "TOGGLE MUSIC"),
+      ("N / B", "NEXT / PREV TRACK"),
+      ("P", "TOGGLE REPLAY"),
+    ]
+    
+    for i, ctrl in controls:
+      sdtx.pos(menuX, menuY + 2.0 + i.float * 1.5)
+      sdtx.color3f(0.2, 0.8, 1.0)
+      sdtx.puts(ctrl[0].cstring)
+      sdtx.pos(menuX + 12.0, menuY + 2.0 + i.float * 1.5)
+      sdtx.color3f(1.0, 1.0, 1.0)
+      sdtx.puts(ctrl[1].cstring)
+    
+    sdtx.pos(menuX, menuY + 20.0)
+    sdtx.color3f(0.5, 0.5, 0.5)
+    sdtx.puts("PRESS ENTER TO GO BACK")
+
+  if state.gameState != GameState.MainMenu and state.gameState != GameState.ControlsMenu:
+    # --- TOP LEFT: MISSION CONTROL ---
+    # Checkpoint progress bar
+    sdtx.pos(1, 1)
+    sdtx.color3f(0.2, 1.0, 0.4)
+    let cpTotal = state.checkpoints.len
+    if cpTotal > 0:
+      let cpCurrent = state.currentCheckpointIdx + 1
+      var cpBar = ""
+      let barMax = 15
+      for i in 1..barMax:
+        let progress = i.float / barMax.float
+        let cpProgress = cpCurrent.float / cpTotal.float
+        if progress < cpProgress: cpBar.add("=")
+        elif progress - (1.0/barMax.float) < cpProgress: cpBar.add(">")
+        else: cpBar.add("-")
+      sdtx.puts(&"POS [{cpBar}] {cpCurrent}/{cpTotal}")
+
+    sdtx.pos(1, 2)
+    sdtx.color3f(0.2, 0.8, 1.0)
+    sdtx.puts(">> RACE DATA")
+    sdtx.color3f(1.0, 1.0, 1.0)
+    sdtx.pos(1, 3)
+    sdtx.puts(&"LAP  {state.lapCount+1:02}")
+    sdtx.pos(1, 4)
+    let currentLapTime = state.time - state.lapStartTime
+    sdtx.puts(&"TIME {currentLapTime:5.2f}")
+    sdtx.pos(1, 5)
+    sdtx.puts(&"BEST {state.bestLapTime:5.2f}")
+
+    # --- TOP RIGHT: AUDIO SYSTEM (Anchored to Right) ---
+    let audioX = gridW - 16.0
+    sdtx.pos(audioX, 2)
+    sdtx.color3f(1.0, 0.6, 0.0)
+    sdtx.puts(">> AUDIO SYSTEM")
+    sdtx.color3f(1.0, 1.0, 1.0)
+    sdtx.pos(audioX, 3)
+    let trackName = getCurrentTrackFilename()
+    let displayName = if trackName.len > 14: trackName[0..11] & ".." else: trackName
+    sdtx.puts(displayName.cstring)
+    sdtx.pos(audioX, 4)
+    sdtx.puts(&"VOL {getMusicVolume()*100:3.0f}%")
+
+    # --- BOTTOM RIGHT: VEHICLE TELEMETRY (Anchored to Bottom-Right) ---
+    let dashX = gridW - 16.0
+    let dashY = gridH - 5.0
+    
+    sdtx.pos(dashX, dashY)
+    sdtx.color3f(1.0, 0.2, 0.2)
+    sdtx.puts(">> TELEMETRY")
+    
+    # Speed
+    sdtx.color3f(1.0, 1.0, 1.0)
+    sdtx.pos(dashX, dashY + 1)
+    sdtx.puts(&"SPD {state.debugSpeed:5.1f} KM/H")
+    
+    # RPM
+    sdtx.pos(dashX, dashY + 2)
+    let rpm = state.debugRpm
+    let rpmPct = clamp((rpm - 1000.0) / 5000.0, 0.0, 1.0)
+    let rpmBars = int(rpmPct * 10)
+    var rpmStr = ""
+    for i in 0..<10:
+      if i < rpmBars: rpmStr.add("|")
+      else: rpmStr.add(".")
+    
+    if rpmPct > 0.8: sdtx.color3f(1.0, 0.0, 0.0) # Redline
+    elif rpmPct > 0.5: sdtx.color3f(1.0, 1.0, 0.0) # Mid
+    else: sdtx.color3f(0.0, 1.0, 0.0) # Low
+    sdtx.puts(&"RPM [{rpmStr}]")
+    
+    # Gear
+    sdtx.color3f(1.0, 1.0, 1.0)
+    sdtx.pos(dashX, dashY + 3)
+    sdtx.puts(&"GEAR {state.debugGear}")
 
   sdtx.draw()
   sg.endPass()
@@ -863,54 +981,110 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
     if not state.gameHasFocus:
       state.gameHasFocus = true
       when defined(emscripten): emscripten_run_script("document.getElementById('canvas').focus();")
+  
   if e.`type` == EventType.eventTypeMouseScroll:
     state.cameraOffsetY += e.scrollY * 0.5
     state.cameraOffsetY = max(state.cameraOffsetY, 0.0)
+
+  if e.`type` == EventType.eventTypeKeyDown:
+    case e.keyCode
+    of keyCodeEscape, keyCodeTab:
+      if state.gameState == GameState.Playing:
+        state.gameState = GameState.Paused
+        state.menu.selectedItem = 0
+        state.menu.itemCount = 6 # RESUME, RESTART, MUSIC, SFX, CONTROLS, QUIT
+      elif state.gameState == GameState.Paused or state.gameState == GameState.ControlsMenu:
+        state.gameState = GameState.Playing
+    of keyCodeW, keyCodeUp:
+      if state.gameState == GameState.Paused or state.gameState == GameState.MainMenu:
+        state.menu.selectedItem = (state.menu.selectedItem + state.menu.itemCount - 1) mod state.menu.itemCount
+    of keyCodeS, keyCodeDown:
+      if state.gameState == GameState.Paused or state.gameState == GameState.MainMenu:
+        state.menu.selectedItem = (state.menu.selectedItem + 1) mod state.menu.itemCount
+    of keyCodeA, keyCodeLeft:
+      if state.gameState == GameState.Paused:
+        if state.menu.selectedItem == 2: # MUSIC VOLUME
+          setMusicVolume(getMusicVolume() - 0.1)
+        elif state.menu.selectedItem == 3: # SFX VOLUME
+          setSfxVolume(getSfxVolume() - 0.1)
+    of keyCodeD, keyCodeRight:
+      if state.gameState == GameState.Paused:
+        if state.menu.selectedItem == 2: # MUSIC VOLUME
+          setMusicVolume(getMusicVolume() + 0.1)
+        elif state.menu.selectedItem == 3: # SFX VOLUME
+          setSfxVolume(getSfxVolume() + 0.1)
+    of keyCodeEnter, keyCodeSpace:
+      if state.gameState == GameState.MainMenu:
+        case state.menu.selectedItem
+        of 0: state.gameState = GameState.Playing # START
+        of 1:
+          state.previousGameState = state.gameState
+          state.gameState = GameState.ControlsMenu # CONTROLS
+        of 2: sapp.requestQuit() # QUIT
+        else: discard
+      elif state.gameState == GameState.Paused:
+        case state.menu.selectedItem
+        of 0: state.gameState = GameState.Playing # RESUME
+        of 1: # RESTART
+          restartLevel(state)
+          state.gameState = GameState.Playing
+        of 2, 3: discard # VOLUME (handled by left/right)
+        of 4:
+          state.previousGameState = state.gameState
+          state.gameState = GameState.ControlsMenu # CONTROLS
+        of 5: sapp.requestQuit() # QUIT
+        else: discard
+      elif state.gameState == GameState.ControlsMenu:
+        state.gameState = state.previousGameState # Go back to menu
+    else: discard
+
   if e.`type` == EventType.eventTypeKeyDown or e.`type` == EventType.eventTypeKeyUp:
     let step: float32 = 0.05
     let isDown = e.`type` == EventType.eventTypeKeyDown
-    case e.keyCode
-    of keyCodeEscape: sapp.requestQuit()
-    of keyCodeW: state.input.accelerate = isDown
-    of keyCodeS: state.input.brake = isDown
-    of keyCodeA: state.input.turnLeft = isDown
-    of keyCodeD: state.input.turnRight = isDown
-    of keyCodeSpace: state.input.drift = isDown
-    of keyCodeR:
-      if isDown:
-        let lastCpIdx = (state.currentCheckpointIdx + state.checkpoints.len - 1) mod state.checkpoints.len
-        let respawnPos = state.checkpoints[lastCpIdx].pos
-        state.player.position = respawnPos + vec3(0, 2, 0)
-        state.player.velocity = vec3(0, 0, 0)
-        let toNext = state.checkpoints[state.currentCheckpointIdx].pos - respawnPos
-        state.player.yaw = (arctan2(toNext.x, toNext.z) + PI) * (180.0 / PI)
-        state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
-    of keyCodeC:
-      if isDown:
-        state.cameraMode = if state.cameraMode == CameraMode.Follow: CameraMode.Front else: CameraMode.Follow
-    of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step)
-    of keyCode2: state.aoShadowStrength += step
-    of keyCode3: state.skyLightIntensity = max(0.0, state.skyLightIntensity - step)
-    of keyCode4: state.skyLightIntensity += step
-    of keyCode5: state.groundLightIntensity = max(0.0, state.groundLightIntensity - step)
-    of keyCode6: state.groundLightIntensity += step
-    of keyCodeP:
-      if isDown:
-        state.isReplaying = not state.isReplaying
-        state.replayIndex = 0
-        if state.isReplaying:
-          state.input = InputState() # Clear input
-    of keyCodeN:
-      if isDown: nextTrack()
-    of keyCodeB:
-      if isDown: prevTrack()
-    of keyCodeM:
-      if isDown: toggleMusic()
-    of keyCode9:
-      if isDown: setMusicVolume(getMusicVolume() - 0.1)
-    of keyCode0:
-      if isDown: setMusicVolume(getMusicVolume() + 0.1)
-    else: discard
+    
+    # Game Controls (only if playing)
+    if state.gameState == GameState.Playing:
+      case e.keyCode
+      of keyCodeW: state.input.accelerate = isDown
+      of keyCodeS: state.input.brake = isDown
+      of keyCodeA: state.input.turnLeft = isDown
+      of keyCodeD: state.input.turnRight = isDown
+      of keyCodeSpace: state.input.drift = isDown
+      of keyCodeR:
+        if isDown:
+          let lastCpIdx = (state.currentCheckpointIdx + state.checkpoints.len - 1) mod state.checkpoints.len
+          let respawnPos = state.checkpoints[lastCpIdx].pos
+          state.player.position = respawnPos + vec3(0, 2, 0)
+          state.player.velocity = vec3(0, 0, 0)
+          let toNext = state.checkpoints[state.currentCheckpointIdx].pos - respawnPos
+          state.player.yaw = (arctan2(toNext.x, toNext.z) + PI) * (180.0 / PI)
+          state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
+      of keyCodeC:
+        if isDown:
+          state.cameraMode = if state.cameraMode == CameraMode.Follow: CameraMode.Front else: CameraMode.Follow
+      of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step)
+      of keyCode2: state.aoShadowStrength += step
+      of keyCode3: state.skyLightIntensity = max(0.0, state.skyLightIntensity - step)
+      of keyCode4: state.skyLightIntensity += step
+      of keyCode5: state.groundLightIntensity = max(0.0, state.groundLightIntensity - step)
+      of keyCode6: state.groundLightIntensity += step
+      of keyCodeP:
+        if isDown:
+          state.isReplaying = not state.isReplaying
+          state.replayIndex = 0
+          if state.isReplaying:
+            state.input = InputState() # Clear input
+      of keyCodeN:
+        if isDown: nextTrack()
+      of keyCodeB:
+        if isDown: prevTrack()
+      of keyCodeM:
+        if isDown: toggleMusic()
+      of keyCode9:
+        if isDown: setMusicVolume(getMusicVolume() - 0.1)
+      of keyCode0:
+        if isDown: setMusicVolume(getMusicVolume() + 0.1)
+      else: discard
 
 sapp.run(sapp.Desc(
   initCb: init,

@@ -83,9 +83,22 @@ type
     Follow,
     Front
 
+  GameState* = enum
+    MainMenu,
+    Playing,
+    Paused,
+    ControlsMenu
+
+  PauseMenuState* = object
+    selectedItem*: int
+    itemCount*: int
+
   State* = object
     # App
     gameHasFocus*: bool
+    gameState*: GameState
+    previousGameState*: GameState # To return from sub-menus
+    menu*: PauseMenuState
     # Asset Management
     res*: ResourceManager
     # Rendering

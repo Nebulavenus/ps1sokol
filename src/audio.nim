@@ -76,6 +76,7 @@ type
     musicPosition: int
     musicPlaying: bool
     musicVolume: float32
+    sfxVolume: float32
 
 var audioState: AudioState
 var audioSamples: array[SAUDIO_NUM_SAMPLES, float32] # Buffer for samples
@@ -109,6 +110,7 @@ proc audioInit*() =
   audioState.musicPlaying = false
   audioState.musicPosition = 0
   audioState.musicVolume = DEFAULT_MUSIC_VOLUME
+  audioState.sfxVolume = 1.0
 
 proc audioShutdown*() =
   saudio.shutdown()
@@ -280,6 +282,12 @@ proc setMusicVolume*(vol: float32) =
 proc getMusicVolume*(): float32 =
   return audioState.musicVolume
 
+proc setSfxVolume*(vol: float32) =
+  audioState.sfxVolume = clamp(vol, 0.0, 1.0)
+
+proc getSfxVolume*(): float32 =
+  return audioState.sfxVolume
+
 proc getCurrentTrackFilename*(): string =
   if audioState.playlist.len > 0:
     let full = audioState.playlist[audioState.currentTrackIdx].filename
@@ -336,7 +344,7 @@ proc audioGenerateSamples*() =
         elif audioState.screechPhase < 0.0: audioState.screechPhase += 1.0
 
       # Apply overall engine volume and low-pass filter
-      engineSample *= audioState.engineVolume
+      engineSample *= audioState.engineVolume * audioState.sfxVolume
       engineSample = lerp(audioState.lastOutputSample, engineSample, filterCutoff)
       audioState.lastOutputSample = engineSample
 
