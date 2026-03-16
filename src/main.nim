@@ -55,19 +55,32 @@ proc extractPathFromRoadMesh(vertices: seq[Vertex], indices: seq[uint16]): seq[V
   var sortedNodes: seq[Vec3]
   var visited = newSeq[bool](rawNodes.len)
   
-  # Start near player spawn to ensure the loop starts at the right place
+  # 1. Start by finding the ABSOLUTE closest triangle center to the spawn position
   var currentPos = vec3(0.0, 12.0, 25.0)
+  var startIdx = -1
+  var startMinDist = 1e9
+  for i in 0 ..< rawNodes.len:
+    let d = len(rawNodes[i] - currentPos)
+    if d < startMinDist:
+      startMinDist = d
+      startIdx = i
+  
+  if startIdx != -1:
+    currentPos = rawNodes[startIdx]
+    # Do NOT mark visited yet, so the first spine node includes it
   
   # Heuristic: Find the spine of the road by jumping along it and averaging nearby triangles
-  for _ in 0 ..< 200:
+  # Increased limit to 500 nodes to support longer tracks
+  for _ in 0 ..< 500:
     var closestIdx = -1
     var closestDist = 1e9
     
-    # Find the nearest unvisited triangle to our current "spine" position
+    # Find the nearest unvisited triangle that is at least a small jump away (5.0)
+    # to avoid clustering, but not too far (35.0) to avoid jumping to parallel roads
     for i in 0 ..< rawNodes.len:
       if visited[i]: continue
       let d = len(rawNodes[i] - currentPos)
-      if d < closestDist and d > 15.0: # Minimum jump to avoid over-density
+      if d < closestDist and d > 5.0: # Minimum jump reduced for better resolution
         closestDist = d
         closestIdx = i
     
@@ -80,7 +93,7 @@ proc extractPathFromRoadMesh(vertices: seq[Vertex], indices: seq[uint16]): seq[V
       for i in 0 ..< rawNodes.len:
         if visited[i]: continue
         let d = len(rawNodes[i] - anchor)
-        if d < 20.0: # Road width threshold
+        if d < 25.0: # Road width threshold slightly increased
           sum = sum + rawNodes[i]
           count += 1
           visited[i] = true
@@ -91,6 +104,32 @@ proc extractPathFromRoadMesh(vertices: seq[Vertex], indices: seq[uint16]): seq[V
         currentPos = spineNode
     else:
       break
+
+  # Path Smoothing: Interpolate between nodes using Catmull-Rom to create a "curve"
+  if sortedNodes.len > 4:
+    var curvedNodes: seq[Vec3]
+    for i in 0 ..< sortedNodes.len:
+      let p0 = sortedNodes[(i + sortedNodes.len - 1) mod sortedNodes.len]
+      let p1 = sortedNodes[i]
+      let p2 = sortedNodes[(i + 1) mod sortedNodes.len]
+      let p3 = sortedNodes[(i + 2) mod sortedNodes.len]
+      
+      # Subdivide each segment into 4 parts for smoother AI pathing
+      for t_idx in 0 ..< 4:
+        let t = t_idx.float32 / 4.0f32
+        let tt = t * t
+        let ttt = tt * t
+        
+        let node = (
+          (p1 * 2.0f32) +
+          (p2 - p0) * t +
+          (p0 * 2.0f32 - p1 * 5.0f32 + p2 * 4.0f32 - p3) * tt +
+          (p1 * 3.0f32 - p0 - p2 * 3.0f32 + p3) * ttt
+        ) * 0.5f32
+        curvedNodes.add(node)
+    
+    echo &"Extracted {sortedNodes.len} spine nodes, expanded to {curvedNodes.len} curved nodes"
+    return curvedNodes
 
   echo &"Extracted {sortedNodes.len} sequential center-line nodes"
   return sortedNodes
@@ -516,21 +555,10 @@ proc init() {.cdecl.} =
   # Phase 3: Gameplay Systems Initialization
   state.pathNodes = extractPathFromRoadMesh(state.roadCollisionVertices, state.roadCollisionIndices)
   state.checkpoints = @[]
-  for node in state.pathNodes:
-    state.checkpoints.add(Checkpoint(pos: node, radius: 15.0))
-  
-  if state.pathNodes.len > 0:
-    state.aiCars = @[]
-    let aiOffsets = [vec3(-5, 0, 0), vec3(5, 0, -10), vec3(-5, 0, -20)]
-    for offset in aiOffsets:
-      state.aiCars.add(AIVehicle(
-        position: state.pathNodes[0] + offset,
-        velocity: vec3(0, 0, 0),
-        yaw: 0.0,
-        targetNode: 1 mod state.pathNodes.len,
-        currentCheckpointIdx: 0,
-        lapCount: 0
-      ))
+  # Only create checkpoints every 4 nodes (the original spine nodes) to avoid HUD spam
+  # and ensure they are spaced reasonably (~20 units)
+  for i in countup(0, state.pathNodes.len - 1, 4):
+    state.checkpoints.add(Checkpoint(pos: state.pathNodes[i], radius: 18.0))
   
   state.lapStartTime = state.time
   state.bestLapTime = 0.0
@@ -666,82 +694,6 @@ proc frame() {.cdecl.} =
             state.bestLapTime = state.lastLapTime
           state.lapStartTime = state.time
 
-    # AI Update
-    for ai in mitems(state.aiCars):
-      let targetPos = state.pathNodes[ai.targetNode]
-      let toTarget = targetPos - ai.position
-      let dist = len(toTarget)
-      
-      if dist < 12.0:
-        ai.targetNode = (ai.targetNode + 1) mod state.pathNodes.len
-      
-      # AI Checkpoint logic
-      if state.checkpoints.len > 0:
-        let nextCp = state.checkpoints[ai.currentCheckpointIdx]
-        if len(ai.position - nextCp.pos) < nextCp.radius:
-          ai.currentCheckpointIdx = (ai.currentCheckpointIdx + 1) mod state.checkpoints.len
-          if ai.currentCheckpointIdx == 0:
-            ai.lapCount += 1
-
-      let desiredDir = norm(toTarget)
-      
-      # Improved AI steering and alignment to track normal
-      var surfaceUp = vec3.up()
-      let aiSurface = getSurfaceInfo(state, ai.position)
-      if aiSurface.isSome:
-        surfaceUp = aiSurface.get().normal
-        ai.position.y = aiSurface.get().pos.y + 0.9
-      
-      let rightDir = ai.rotation * vec3(1, 0, 0)
-      
-      # Calculate steering based on local coordinate system
-      let steeringDot = dot(rightDir, desiredDir)
-      if steeringDot > 0.05: ai.yaw -= 3.0 * dt
-      elif steeringDot < -0.05: ai.yaw += 3.0 * dt
-      
-      # Rebuild rotation matrix based on surface normal (same as player)
-      let yawRot = rotate(ai.yaw, surfaceUp)
-      let baseForward = vec3(0, 0, -1)
-      let newForward = norm(yawRot * baseForward)
-      let newRight = norm(cross(newForward, surfaceUp))
-      let finalForward = norm(cross(surfaceUp, newRight))
-      ai.rotation = fromCols(newRight, surfaceUp, finalForward, vec3(0,0,0))
-      
-      # Movement with barrier collision
-      ai.velocity = (ai.rotation * vec3(0, 0, -1)) * 18.0
-      var nextAiPos = ai.position + ai.velocity * dt
-      
-      let aiCollision = checkBarrierCollisions(state, nextAiPos, ai.rotation)
-      if aiCollision.collided:
-        nextAiPos += aiCollision.pushOut
-        ai.position = nextAiPos
-        # AI Velocity reflection
-        let wallNormal = norm(aiCollision.pushOut)
-        let velAlongNormal = dot(ai.velocity, wallNormal)
-        if velAlongNormal < 0:
-          ai.velocity = ai.velocity * 0.9 # Lose more speed on hit
-          ai.velocity -= wallNormal * velAlongNormal * 1.1
-        # Randomize yaw slightly to help get unstuck
-        ai.yaw += rand(-0.2..0.2)
-      else:
-        ai.position = nextAiPos
-      
-      # Stuck recovery: If AI is too slow for too long, respawn it
-      if len(ai.velocity) < 1.0:
-        # We need a timer field in AIVehicle, but for now let's use a simple distance check
-        # Actually, let's just use the existing respawn logic if it's falling or far from path
-        discard
-      
-      # AI Respawn if OOB or falling
-      if ai.position.y < -5.0 or aiSurface.isNone:
-        let lastCpIdx = (ai.currentCheckpointIdx + state.checkpoints.len - 1) mod state.checkpoints.len
-        let respawnPos = state.checkpoints[lastCpIdx].pos
-        ai.position = respawnPos + vec3(0, 2, 0)
-        ai.velocity = vec3(0, 0, 0)
-        let toNext = norm(state.checkpoints[ai.currentCheckpointIdx].pos - respawnPos)
-        ai.yaw = (arctan2(toNext.x, toNext.z) + PI) * (180.0 / PI)
-        ai.rotation = rotate(ai.yaw, vec3(0, 1, 0))
-
     # Replay Recording / Playback
     if state.isReplaying:
       if state.replayBuffer.len > 0:
@@ -784,23 +736,7 @@ proc frame() {.cdecl.} =
  
   drawShadow(proj, view)
   drawCheckpoints(proj, view)
-  # Draw AI Shadows
-  for ai in state.aiCars:
-    let shadowPos = ai.position + vec3(0, -0.85, 0)
-    let aiShadowModel = translate(shadowPos) * rotate(ai.yaw, vec3(0, 1, 0)) * scale(vec3(1.5, 1.0, 2.5))
-    var vsParams = spr.VsParams(u_mvp: proj * view * aiShadowModel, u_camPos: state.cameraPos, u_jitterAmount: 240.0)
-    var fsParamsShadow = spr.FsParams(u_fogColor: vec3(0.25f, 0.5f, 0.75f), u_fogNear: 1000.0f, u_fogFar: 1500.0f, u_alphaThreshold: 0.01f)
-    var bindings = Bindings()
-    bindings.vertexBuffers[0] = state.quadVBuf
-    bindings.indexBuffer = state.quadIBuf
-    bindings.images[spr.imgUTexture] = state.shadowTexture
-    bindings.samplers[spr.smpUSampler] = state.shadowSampler
-    sg.applyPipeline(state.pipSprite)
-    sg.applyBindings(bindings)
-    sg.applyUniforms(spr.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
-    sg.applyUniforms(spr.ubFsParams, sg.Range(addr: fsParamsShadow.addr, size: fsParamsShadow.sizeof))
-    sg.draw(0, 6, 1)
-
+  
   drawParticles(proj, view)
   
   sg.applyPipeline(state.pip)
@@ -816,20 +752,6 @@ proc frame() {.cdecl.} =
   sg.applyBindings(state.carMesh3.bindings)
   sg.applyUniforms(shd.ubVsParams, sg.Range(addr: carVsParams.addr, size: carVsParams.sizeof))
   sg.draw(0, state.carMesh3.indexCount, 1)
-
-  # Draw AI Cars
-  for ai in state.aiCars:
-    let aiModel = translate(ai.position) * ai.rotation
-    var aiVsParams = shd.VsParams(u_mvp: proj * view * aiModel, u_model: aiModel, u_camPos: state.cameraPos, u_jitterAmount: sapp.heightf())
-    sg.applyBindings(state.carMesh1.bindings)
-    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: aiVsParams.addr, size: aiVsParams.sizeof))
-    sg.draw(0, state.carMesh1.indexCount, 1)
-    sg.applyBindings(state.carMesh2.bindings)
-    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: aiVsParams.addr, size: aiVsParams.sizeof))
-    sg.draw(0, state.carMesh2.indexCount, 1)
-    sg.applyBindings(state.carMesh3.bindings)
-    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: aiVsParams.addr, size: aiVsParams.sizeof))
-    sg.draw(0, state.carMesh3.indexCount, 1)
 
   sg.endPass()
   
@@ -852,17 +774,6 @@ proc frame() {.cdecl.} =
   sdtx.puts((&"Best Lap: {state.bestLapTime:5.2f}\n").cstring)
   sdtx.puts("\n")
   
-  # Calculate Ranking
-  var playerRank = 1
-  for ai in state.aiCars:
-    if ai.lapCount > state.lapCount:
-      playerRank += 1
-    elif ai.lapCount == state.lapCount:
-      if ai.currentCheckpointIdx > state.currentCheckpointIdx:
-        playerRank += 1
-  
-  sdtx.color3f(1.0, 1.0, 1.0)
-  sdtx.puts((&"Position: {playerRank}/{state.aiCars.len + 1}\n").cstring)
   sdtx.draw()
   sg.endPass()
   sg.commit()
@@ -900,7 +811,7 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
         state.player.position = respawnPos + vec3(0, 2, 0)
         state.player.velocity = vec3(0, 0, 0)
         let toNext = state.checkpoints[state.currentCheckpointIdx].pos - respawnPos
-        state.player.yaw = arctan2(toNext.x, toNext.z) + PI
+        state.player.yaw = (arctan2(toNext.x, toNext.z) + PI) * (180.0 / PI)
         state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
     of keyCode1: state.aoShadowStrength = max(0.0, state.aoShadowStrength - step)
     of keyCode2: state.aoShadowStrength += step
