@@ -524,7 +524,7 @@ proc init() {.cdecl.} =
   state.groundLightColor = vec3(0.6, 0.4, 0.3)
   state.groundLightIntensity = 0.0
   let pointSmp = sg.makeSampler(sg.SamplerDesc(minFilter: filterNearest, magFilter: filterNearest))
-  loadMusic(ASSETS_FS, "music/sunset_relay.qoa")
+  loadMusicPlaylist(ASSETS_FS, "music")
   let trackTexture1 = loadTexture(state, ASSETS_FS, "map2"/"track_road.qoi")
   let trackTexture2 = loadTexture(state, ASSETS_FS, "map2"/"track_shape.qoi")
   let trackTexture3 = loadTexture(state, ASSETS_FS, "map2"/"track_trees.qoi")
@@ -775,6 +775,10 @@ proc frame() {.cdecl.} =
   sdtx.puts((&"Last Lap: {state.lastLapTime:5.2f}\n").cstring)
   sdtx.puts((&"Best Lap: {state.bestLapTime:5.2f}\n").cstring)
   sdtx.puts("\n")
+  sdtx.color3f(1.0, 0.5, 0.0)
+  sdtx.puts((&"Music: {getCurrentTrackFilename()}\n").cstring)
+  sdtx.puts((&"Vol: {getMusicVolume()*100:3.0f}%\n").cstring)
+  sdtx.puts("\n")
   
   sdtx.draw()
   sg.endPass()
@@ -830,6 +834,16 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
         state.replayIndex = 0
         if state.isReplaying:
           state.input = InputState() # Clear input
+    of keyCodeN:
+      if isDown: nextTrack()
+    of keyCodeB:
+      if isDown: prevTrack()
+    of keyCodeM:
+      if isDown: toggleMusic()
+    of keyCode9:
+      if isDown: setMusicVolume(getMusicVolume() - 0.1)
+    of keyCode0:
+      if isDown: setMusicVolume(getMusicVolume() + 0.1)
     else: discard
 
 sapp.run(sapp.Desc(

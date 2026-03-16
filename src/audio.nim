@@ -5,6 +5,8 @@ import math
 import std/random # For noise generation
 import streams
 import strformat
+import strutils
+import std/os
 import rtfs, qoa
 
 const
@@ -45,6 +47,11 @@ const
   SCREECH_NOISE_MIX = 0.3        # How much white noise to mix with the high-freq tone (0.0 to 1.0)
 
 type
+  AudioTrack* = object
+    pcm*: seq[int16]
+    channels*: int
+    filename*: string
+
   AudioState = object
     oscillatorPhases: array[MAX_HARMONICS, float32] # Each harmonic needs its own phase
     screechPhase: float32
@@ -64,11 +71,11 @@ type
     gearShiftTimer: float32
 
     # Music playback state
-    musicPcm: seq[int16]
+    playlist: seq[AudioTrack]
+    currentTrackIdx: int
     musicPosition: int
     musicPlaying: bool
     musicVolume: float32
-    musicChannels: int
 
 var audioState: AudioState
 var audioSamples: array[SAUDIO_NUM_SAMPLES, float32] # Buffer for samples
@@ -97,10 +104,11 @@ proc audioInit*() =
   audioState.gearShiftTimer = 0.0
 
   # Init music state
+  audioState.playlist = @[]
+  audioState.currentTrackIdx = 0
   audioState.musicPlaying = false
   audioState.musicPosition = 0
   audioState.musicVolume = DEFAULT_MUSIC_VOLUME
-  audioState.musicChannels = 0
 
 proc audioShutdown*() =
   saudio.shutdown()
@@ -217,19 +225,19 @@ proc loadMusic*(fs: rtfs.RuntimeFS, filename: string) =
     stream.close()
     return
 
-  audioState.musicChannels = decoder.getChannels()
+  let channels = decoder.getChannels()
   let musicSampleRate = decoder.getSampleRate()
   let totalSamples = decoder.getTotalSamples()
 
   if musicSampleRate != SAUDIO_SAMPLE_RATE.int:
     echo(&"Music sample rate ({musicSampleRate} Hz) does not match audio device rate ({SAUDIO_SAMPLE_RATE} Hz). This will cause pitch issues. Resampling is not implemented.")
 
-  audioState.musicPcm.setLen(totalSamples * audioState.musicChannels)
+  var pcm = newSeq[int16](totalSamples * channels)
   var samplesRead = 0
   while not decoder.isEnd():
-    let frameSamples = decoder.readFrame(audioState.musicPcm.toOpenArray(
-      samplesRead * audioState.musicChannels,
-      audioState.musicPcm.len - 1
+    let frameSamples = decoder.readFrame(pcm.toOpenArray(
+      samplesRead * channels,
+      pcm.len - 1
     ))
     if frameSamples < 0:
       echo(&"Error decoding QOA frame for: {filename}")
@@ -240,11 +248,56 @@ proc loadMusic*(fs: rtfs.RuntimeFS, filename: string) =
   stream.close()
 
   if samplesRead > 0:
-    audioState.musicPlaying = true
-    audioState.musicPosition = 0
-    echo(&"Successfully loaded music: {filename} ({totalSamples} samples, {audioState.musicChannels} channels)")
+    let track = AudioTrack(pcm: pcm, channels: channels, filename: filename)
+    audioState.playlist.add(track)
+    if not audioState.musicPlaying:
+      audioState.musicPlaying = true
+      audioState.currentTrackIdx = 0
+      audioState.musicPosition = 0
+    echo(&"Successfully loaded music track: {filename} ({totalSamples} samples, {channels} channels)")
   else:
     echo(&"Music file '{filename}' loaded but contains no samples.")
+
+proc nextTrack*() =
+  if audioState.playlist.len > 0:
+    audioState.musicPosition = 0
+    audioState.currentTrackIdx = (audioState.currentTrackIdx + 1) mod audioState.playlist.len
+    echo(&"Next track: {audioState.playlist[audioState.currentTrackIdx].filename}")
+
+proc prevTrack*() =
+  if audioState.playlist.len > 0:
+    audioState.musicPosition = 0
+    audioState.currentTrackIdx = (audioState.currentTrackIdx + audioState.playlist.len - 1) mod audioState.playlist.len
+    echo(&"Previous track: {audioState.playlist[audioState.currentTrackIdx].filename}")
+
+proc toggleMusic*() =
+  audioState.musicPlaying = not audioState.musicPlaying
+  echo(&"Music playing: {audioState.musicPlaying}")
+
+proc setMusicVolume*(vol: float32) =
+  audioState.musicVolume = clamp(vol, 0.0, 1.0)
+
+proc getMusicVolume*(): float32 =
+  return audioState.musicVolume
+
+proc getCurrentTrackFilename*(): string =
+  if audioState.playlist.len > 0:
+    let full = audioState.playlist[audioState.currentTrackIdx].filename
+    var name = full
+    if name.contains("/"): name = name.split("/")[^1]
+    if name.contains("\\"): name = name.split("\\")[^1]
+    if name.endsWith(".qoa"): name = name[0..^5]
+    return name
+  else:
+    return "None"
+
+proc loadMusicPlaylist*(fs: rtfs.RuntimeFS, dir: string) =
+  echo(&"Loading music playlist from: {dir}")
+  for path in fs.listDir(dir):
+    if path.endsWith(".qoa"):
+      let fullPath = dir / path
+      echo(&"Found track: {fullPath}")
+      loadMusic(fs, fullPath)
 
 proc audioGenerateSamples*() =
   let expectedFrames = saudio.expect()
@@ -290,20 +343,23 @@ proc audioGenerateSamples*() =
     # --- 2. Generate Music Sample ---
     var musicSample: float32 = 0.0
     block generateMusic:
-      if audioState.musicPlaying and audioState.musicPcm.len > 0:
-        let pcmLen = audioState.musicPcm.len
-        if audioState.musicChannels == 1: # Mono
-          musicSample = float32(audioState.musicPcm[audioState.musicPosition]) / 32767.0
+      if audioState.musicPlaying and audioState.playlist.len > 0:
+        let track = addr audioState.playlist[audioState.currentTrackIdx]
+        let pcmLen = track.pcm.len
+        if track.channels == 1: # Mono
+          musicSample = float32(track.pcm[audioState.musicPosition]) / 32767.0
           audioState.musicPosition = (audioState.musicPosition + 1)
-        elif audioState.musicChannels >= 2: # Stereo or more, mix to mono
-          let left = float32(audioState.musicPcm[audioState.musicPosition]) / 32767.0
-          let right = float32(audioState.musicPcm[audioState.musicPosition + 1]) / 32767.0
+        elif track.channels >= 2: # Stereo or more, mix to mono
+          let left = float32(track.pcm[audioState.musicPosition]) / 32767.0
+          let right = float32(track.pcm[audioState.musicPosition + 1]) / 32767.0
           musicSample = (left + right) * 0.5 # Simple mono mixdown
-          audioState.musicPosition += audioState.musicChannels
+          audioState.musicPosition += track.channels
 
-        # Loop music
+        # Advance to next track or loop
         if audioState.musicPosition >= pcmLen:
           audioState.musicPosition = 0
+          audioState.currentTrackIdx = (audioState.currentTrackIdx + 1) mod audioState.playlist.len
+          echo(&"Switching to next music track: {audioState.playlist[audioState.currentTrackIdx].filename}")
 
         musicSample *= audioState.musicVolume
 
