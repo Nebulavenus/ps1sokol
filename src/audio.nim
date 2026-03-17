@@ -301,13 +301,25 @@ proc getCurrentTrackFilename*(): string =
 
 proc loadMusicPlaylist*(fs: rtfs.RuntimeFS, dir: string) =
   echo(&"Loading music playlist from: {dir}")
+  var paths: seq[string]
   for path in fs.listDir(dir):
     if path.endsWith(".qoa"):
-      let fullPath = dir / path
-      echo(&"Found track: {fullPath}")
-      loadMusic(fs, fullPath)
+      paths.add(path)
+  
+  # Shuffle paths to randomize order
+  shuffle(paths)
+  
+  for path in paths:
+    let fullPath = dir / path
+    echo(&"Found track: {fullPath}")
+    loadMusic(fs, fullPath)
+  
+  # Reset to first track in shuffled list
+  if audioState.playlist.len > 0:
+    audioState.currentTrackIdx = 0
+    audioState.musicPosition = 0
 
-proc audioGenerateSamples*() =
+proc audioGenerateSamples*(playing: bool) =
   let expectedFrames = saudio.expect()
   if expectedFrames == 0: return
 
@@ -321,6 +333,8 @@ proc audioGenerateSamples*() =
     # --- 1. Generate Engine Sample ---
     var engineSample: float32 = 0.0
     block generateEngine:
+      if not playing: break generateEngine
+
       # Sum up harmonic components
       for h in 0..<MAX_HARMONICS:
         let harmonicSample = (2.0 * (audioState.oscillatorPhases[h] - floor(audioState.oscillatorPhases[h])) - 1.0)
@@ -351,6 +365,7 @@ proc audioGenerateSamples*() =
     # --- 2. Generate Music Sample ---
     var musicSample: float32 = 0.0
     block generateMusic:
+      if not playing: break generateMusic
       if audioState.musicPlaying and audioState.playlist.len > 0:
         let track = addr audioState.playlist[audioState.currentTrackIdx]
         let pcmLen = track.pcm.len

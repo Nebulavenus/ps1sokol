@@ -131,6 +131,7 @@ type
     trackMesh2*: Mesh # Shape
     trackMesh3*: Mesh # Grass
     trackMesh4*: Mesh # Trees
+    trackMesh5*: Mesh # Borders
     # CPU-side collision geometry for the road
     roadCollisionVertices*: seq[Vertex]
     roadCollisionIndices*: seq[uint16]

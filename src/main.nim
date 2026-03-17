@@ -480,9 +480,19 @@ proc drawShadow(proj, view: Mat4) =
   sg.draw(0, 6, 1)
 
 proc restartLevel(state: var State) =
-  state.player.position = vec3(0.0, 12, 25.0)
+  if state.gameState == GameState.MainMenu:
+    state.player.position = vec3(0.0, 12, 25.0)
+    state.player.yaw = 0.0
+  elif state.pathNodes.len > 1:
+    state.player.position = state.pathNodes[0] + vec3(0, 1, 0)
+    let toNext = norm(state.pathNodes[1] - state.pathNodes[0])
+    # Added PI to rotate by 180 degrees as requested
+    state.player.yaw = (arctan2(toNext.x, toNext.z) + PI) * (180.0 / PI)
+  else:
+    state.player.position = vec3(0.0, 12, 25.0)
+    state.player.yaw = 0.0
+
   state.player.velocity = vec3(0, 0, 0)
-  state.player.yaw = 0.0
   state.player.angularVelocity = 0.0
   state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0))
   state.currentCheckpointIdx = 0
@@ -514,6 +524,7 @@ proc loadLevel*(state: var State, fs: var RuntimeFS, mapDir: string) =
   state.trackMesh2 = loadAndProcessMesh(state, fs, mapDir/"track_shape.ply", aoParams, trackTexture2, pointSmp)
   state.trackMesh3 = loadAndProcessMesh(state, fs, mapDir/"track_trees.ply", aoParams, trackTexture3, pointSmp)
   state.trackMesh4 = loadAndProcessMesh(state, fs, mapDir/"track_barrier.ply", aoParams, trackTexture1, pointSmp)
+  state.trackMesh5 = loadAndProcessMesh(state, fs, mapDir/"track_borders.ply", aoParams, trackTexture1, pointSmp)
   
   # Load collision
   (state.roadCollisionVertices, state.roadCollisionIndices) = loadAndProcessMeshCollision(fs, mapDir/"track_road.ply")
@@ -543,13 +554,16 @@ proc loadLevel*(state: var State, fs: var RuntimeFS, mapDir: string) =
       let startIdx = (i + 1) * 2 # Offset AI cars slightly
       ai.position = state.pathNodes[startIdx] + vec3(0, 1, 0)
       ai.targetNode = (startIdx + 1) mod state.pathNodes.len
-      ai.yaw = 0.0
+      let toTarget = norm(state.pathNodes[ai.targetNode] - ai.position)
+      # Fixed to consistently use +PI for correct forward orientation
+      ai.yaw = (arctan2(toTarget.x, toTarget.z) + PI) * (180.0 / PI)
       ai.rotation = rotate(ai.yaw, vec3(0, 1, 0))
       ai.difficulty = config.diff
       ai.name = config.name
       state.aiCars.add(ai)
 
   restartLevel(state)
+
 proc init() {.cdecl.} =
   ASSETS_FS = newRuntimeFS("assets")
   state.gameHasFocus = not defined(emscripten)
@@ -664,7 +678,8 @@ proc updateAI(state: var State, dt: float32) =
       let groundNormal = groundInfo.get().normal
       let right = norm(cross(forward, groundNormal))
       let finalForward = norm(cross(groundNormal, right))
-      ai.rotation = fromCols(right, groundNormal, finalForward, vec3(0,0,0))
+      # In our system -Z is forward, so the 3rd column (+Z) must be -finalForward
+      ai.rotation = fromCols(right, groundNormal, -finalForward, vec3(0,0,0))
 
 proc worldToScreen(worldPos: Vec3, proj, view: Mat4, width, height: float32): (Vec3, bool) =
   let clipPos = proj * view * worldPos
@@ -682,6 +697,28 @@ proc worldToScreen(worldPos: Vec3, proj, view: Mat4, width, height: float32): (V
   let screenX = (clipPos.x + 1.0) * 0.5 * width
   let screenY = (1.0 - clipPos.y) * 0.5 * height
   return (vec3(screenX, screenY, 0), true)
+
+proc updateCamera(state: var State, dt: float32) =
+  if state.cameraMode == CameraMode.Follow:
+    let targetPos = state.player.position
+    let carRot = state.player.rotation
+    # In my coordinate system, -Z is forward, so +Z is back
+    let backDir = carRot * vec3(0, 0, 1)
+    
+    let radius = 10.0f
+    let height = state.cameraOffsetY # Uses mouse scroll value
+    let desiredCamPos = targetPos + (backDir * radius) + vec3(0, height, 0)
+    
+    # Smooth camera
+    state.cameraPos = lerpV(state.cameraPos, desiredCamPos, 0.1)
+    state.cameraTarget = lerpV(state.cameraTarget, targetPos + vec3(0, 1.5, 0), 0.2)
+  else:
+    # Front camera
+    let targetPos = state.player.position
+    let carRot = state.player.rotation
+    let frontDir = carRot * vec3(0, 0, -1)
+    state.cameraPos = targetPos + (frontDir * 8.0) + vec3(0, 3.0, 0)
+    state.cameraTarget = targetPos
 
 proc drawVehicle(proj, view, model: Mat4, camPos: Vec3) =
   var vsParams = shd.VsParams(u_mvp: proj * view * model, u_model: model, u_camPos: camPos, u_jitterAmount: sapp.heightf())
@@ -798,7 +835,8 @@ proc frame() {.cdecl.} =
       let newForward = yawRot * prevForward
       let newRight = norm(cross(newForward, surfaceUp))
       let finalForward = norm(cross(surfaceUp, newRight))
-      state.player.rotation = fromCols(newRight, surfaceUp, finalForward, vec3(0,0,0))
+      # In our system -Z is forward, so the 3rd column (+Z) must be -finalForward
+      state.player.rotation = fromCols(newRight, surfaceUp, -finalForward, vec3(0,0,0))
       
       if state.input.drift:
         let carRot = state.player.rotation
@@ -846,18 +884,31 @@ proc frame() {.cdecl.} =
         if state.replayBuffer.len > 10000: # Limit buffer size
           state.replayBuffer.delete(0)
 
-    updateParticles(dt)
-    if state.gameState == GameState.Playing:
-      updateCamera(state, dt)
-    elif state.gameState == GameState.MainMenu:
-      # Simple rotating camera for Main Menu
-      let radius = 15.0f
-      let speed = 0.2f
-      state.cameraPos = state.player.position + vec3(cos(state.time * speed) * radius, 5.0, sin(state.time * speed) * radius)
-      state.cameraTarget = state.player.position
+  # Updates outside the Playing check
+  updateParticles(dt)
+  
+  if state.gameState == GameState.Playing:
+    updateCamera(state, dt)
+  elif state.gameState == GameState.MainMenu:
+    # Rotating car and camera for Main Menu preview
+    let rotateSpeed = 60.0f # degrees per second
+    state.player.yaw += rotateSpeed * dt
+    if state.player.yaw >= 360.0: state.player.yaw -= 360.0
     
-    audioGenerateSamples()
+    # Add a bit of tilt (pitch and roll) for that classic preview look
+    let pitch = sin(state.time * 2.0) * 2.0f
+    let roll = cos(state.time * 1.5) * 3.0f
+    state.player.rotation = rotate(state.player.yaw, vec3(0, 1, 0)) * 
+                             rotate(pitch, vec3(1, 0, 0)) * 
+                             rotate(roll, vec3(0, 0, 1))
 
+    # Camera orbit
+    let radius = 12.0f
+    let camSpeed = 0.3f
+    state.cameraPos = state.player.position + vec3(cos(state.time * camSpeed) * radius, 4.0, sin(state.time * camSpeed) * radius)
+    state.cameraTarget = state.player.position + vec3(0, 0.5, 0)
+  
+  audioGenerateSamples(state.gameState == GameState.Playing)
   let fsParams = computeFsParams()
   let proj = persp(60.0f, sapp.widthf() / sapp.heightf(), 0.01f, 150.0f)
   let view = lookat(state.cameraPos, state.cameraTarget, vec3.up())
@@ -881,6 +932,10 @@ proc frame() {.cdecl.} =
     sg.applyBindings(state.trackMesh3.bindings)
     sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
     sg.draw(0, state.trackMesh3.indexCount, 1)
+  if isMeshVisible(state.trackMesh5, state.cameraPos, camForward):
+    sg.applyBindings(state.trackMesh5.bindings)
+    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: trackVsParams.addr, size: trackVsParams.sizeof))
+    sg.draw(0, state.trackMesh5.indexCount, 1)
  
   drawShadow(proj, view)
   drawCheckpoints(proj, view)
@@ -894,9 +949,10 @@ proc frame() {.cdecl.} =
     drawVehicle(proj, view, aiModel, state.cameraPos)
 
   # Draw Player
-  if state.cameraMode == CameraMode.Follow:
-    let carModel = translate(state.player.position) * state.player.rotation
-    drawVehicle(proj, view, carModel, state.cameraPos)
+  if state.cameraMode == CameraMode.Follow or state.gameState == GameState.MainMenu:
+    let playerModel = translate(state.player.position) * state.player.rotation
+    # Removed the extra rotate(180) here because it was double-flipping the model relative to drawVehicle
+    drawVehicle(proj, view, playerModel, state.cameraPos)
 
   sg.endPass()
   
@@ -915,7 +971,7 @@ proc frame() {.cdecl.} =
     let menuY = 10.0f
     sdtx.pos(menuX, menuY - 4)
     sdtx.color3f(0.2, 0.8, 1.0)
-    sdtx.puts("=== PS1 SOKOL RACER ===")
+    sdtx.puts("PS1 SOKOL RACER")
     
     let items = ["START GAME", "CONTROLS", "QUIT"]
     for i, item in items:
