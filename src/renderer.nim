@@ -141,12 +141,27 @@ proc initOffscreen*(state: var State) =
   )
 
 proc initScreenQuad*(state: var State) =
-  let vertices = [
-    -1.0f, -1.0f,  0.0f, 1.0f,
-     1.0f, -1.0f,  1.0f, 1.0f,
-     1.0f,  1.0f,  1.0f, 0.0f,
-    -1.0f,  1.0f,  0.0f, 0.0f,
-  ]
+  # WebGL/OpenGL has UV (0,0) at bottom-left, D3D11 has it at top-left.
+  # If we render to a texture, it might be flipped.
+  # Let's adjust UVs based on platform.
+  when defined(emscripten):
+    # GL origin is bottom-left, UV(0,0) is bottom-left.
+    # We want screen(-1, -1) to be texture(0, 0).
+    let vertices = [
+      -1.0f, -1.0f,  0.0f, 0.0f,
+       1.0f, -1.0f,  1.0f, 0.0f,
+       1.0f,  1.0f,  1.0f, 1.0f,
+      -1.0f,  1.0f,  0.0f, 1.0f,
+    ]
+  else:
+    # D3D origin is top-left, UV(0,0) is top-left.
+    # We want screen(-1, -1) to be texture(0, 1).
+    let vertices = [
+      -1.0f, -1.0f,  0.0f, 1.0f,
+       1.0f, -1.0f,  1.0f, 1.0f,
+       1.0f,  1.0f,  1.0f, 0.0f,
+      -1.0f,  1.0f,  0.0f, 0.0f,
+    ]
   state.screenVBuf = sg.makeBuffer(BufferDesc(
     usage: BufferUsage(vertexBuffer: true),
     data: sg.Range(addr: vertices[0].addr, size: vertices.sizeof)
