@@ -60,7 +60,14 @@ void main() {
     // To fake affine mapping, we trick the GPU's perspective-correct interpolator
     // 1. Multiply the UVs by the 'w' component of the vertex's clip-space position
     // 2. Pass this new vec3(u*w, v*w, w) to the fragment shader
-    //vec2 uv = a_texcoord0 * 5.0;
+    
+    // REDUCE SWIMMING: On very large triangles far away, affine mapping breaks.
+    // We can "soften" it by using a power of W or a hybrid approach.
+    // The classic PS1 trick was to subdivide, but here we can bias the W.
+    float perspectiveBias = 1.0; 
+    // If we wanted to reduce swimming, we could mix between affine and perspective
+    // but for now let's keep the pure affine logic and ensure W is handled correctly.
+    
     vec2 uv = a_texcoord0;
     v_affine_uv = vec3(uv * clip_pos.w, clip_pos.w);
 }

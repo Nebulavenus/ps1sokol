@@ -12,7 +12,7 @@ import rtfs, qoa, types
 const
   DEFAULT_MUSIC_VOLUME = 1.0 # Default music volume (0.0 to 1.0)
   SAUDIO_SAMPLE_RATE = 44100.0   # Standard sample rate
-  SAUDIO_NUM_SAMPLES = 2048       # Number of samples to push per chunk (power of 2 is good)
+  SAUDIO_NUM_SAMPLES = 4096       # Increased buffer size to prevent crackling
 
   # --- Engine Sound Parameters ---
   MAX_HARMONICS = 3              # Number of harmonic oscillators

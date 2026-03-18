@@ -128,6 +128,7 @@ proc event*(e: ptr sapp.Event, state: var State) =
       of keyCodeA: state.input.turnLeft = isDown
       of keyCodeD: state.input.turnRight = isDown
       of keyCodeSpace: state.input.drift = isDown
+      of keyCodeLeftShift: state.input.nitroPressed = isDown
       of keyCodeR:
         if isDown:
           let lastCpIdx = (state.currentCheckpointIdx + state.checkpoints.len - 1) mod state.checkpoints.len

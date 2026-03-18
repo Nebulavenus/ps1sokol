@@ -203,6 +203,22 @@ proc drawUI*(state: var State, proj, view: Mat4, canvasW, canvasH: float32) =
       else: sdtx.color3f(1.0, 0.0, 0.0)
       sdtx.puts(&"[{barStr}] {integrity*100:3.0f}%")
 
+      # NITRO HUD
+      sdtx.pos(1, 10)
+      sdtx.color3f(0.0, 0.8, 1.0)
+      sdtx.puts(">> NITRO")
+      let nitro = state.boostAmount
+      let nBarLen = 15
+      let nFilled = int(nitro * nBarLen.float)
+      var nBarStr = ""
+      for b in 0..<nBarLen:
+        if b < nFilled: nBarStr.add("!")
+        else: nBarStr.add(".")
+      sdtx.pos(1, 11)
+      if state.isBoosting: sdtx.color3f(1.0, 1.0, 1.0)
+      else: sdtx.color3f(0.0, 0.6, 0.8)
+      sdtx.puts(&"[{nBarStr}] {nitro*100:3.0f}%")
+
       if state.raceFinished:
         sdtx.pos(10, 12)
         sdtx.color3f(0.0, 1.0, 0.0)

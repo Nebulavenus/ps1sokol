@@ -81,6 +81,7 @@ type
     turnLeft*: bool
     turnRight*: bool
     drift*: bool
+    nitroPressed*: bool
 
   ResourceManager* = object
     meshes*: Table[string, Mesh]
@@ -150,6 +151,7 @@ type
     shadowSampler*: sg.Sampler
     particleTexture*: sg.Image
     checkpointTexture*: sg.Image
+    nitroTexture*: sg.Image
     quadVBuf*: sg.Buffer
     quadIBuf*: sg.Buffer
     passAction*: sg.PassAction
@@ -210,6 +212,10 @@ type
     gameMode*: GameMode
     tofuIntegrity*: float32
     raceFinished*: bool
+    # Nitro / Boost
+    isBoosting*: bool
+    boostAmount*: float32
+    nitroPowerups*: seq[Vec3] # Positions of nitro pickups
 
   SurfaceHit* = object
     pos*: Vec3

@@ -188,6 +188,16 @@ proc frame() {.cdecl.} =
         state.player.angularVelocity += effectiveTurningTorque * dt
       if state.input.turnRight and canMove:
         state.player.angularVelocity -= effectiveTurningTorque * dt
+
+      # Nitro Logic
+      state.isBoosting = state.input.nitroPressed and state.boostAmount > 0.0 and canMove
+      if state.isBoosting:
+        state.player.velocity += forwardDir * (engineForce * 1.5) * dt
+        state.boostAmount -= dt * 0.3 # Consume nitro
+        if state.boostAmount < 0: state.boostAmount = 0
+      else:
+        state.boostAmount = min(1.0, state.boostAmount + dt * 0.05) # Slow recharge
+
       var currentDrag = drag
       if state.input.drift:
         currentDrag *= 1.5
@@ -283,6 +293,19 @@ proc frame() {.cdecl.} =
             if state.gameMode == GameMode.TofuDelivery:
               state.raceFinished = true
 
+      # Nitro Pickup Logic
+      var i = 0
+      while i < state.nitroPowerups.len:
+        if len(state.player.position - state.nitroPowerups[i]) < 3.0:
+          state.boostAmount = min(1.0, state.boostAmount + 0.3)
+          state.nitroPowerups.delete(i)
+          # Spawn some "pickup" particles
+          for _ in 0..10:
+            let vel = vec3(rand(-2.0..2.0), rand(1.0..4.0), rand(-2.0..2.0))
+            emitParticle(state, state.player.position, vel, packColor(0, 255, 255, 200), 0.8)
+        else:
+          i += 1
+
       if state.isReplaying:
         if state.replayBuffer.len > 0:
           let frame = state.replayBuffer[state.replayIndex]
@@ -342,6 +365,7 @@ proc frame() {.cdecl.} =
  
   drawShadow(state, proj, view)
   drawCheckpoints(state, proj, view)
+  drawPowerups(state, proj, view)
   drawParticles(state, proj, view)
   
   sg.applyPipeline(state.pip)

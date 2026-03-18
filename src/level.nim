@@ -112,7 +112,6 @@ proc initBots*(state: var State) =
   if state.pathNodes.len > 10:
     for i in 0 ..< state.aiCount:
       var ai: AIVehicle
-      # Start bots slightly behind or ahead of player spawn
       let startIdx = (i + 1) * 4
       if startIdx >= state.pathNodes.len: break
       
@@ -133,10 +132,16 @@ proc initBots*(state: var State) =
         elif botDiff == Difficulty.Medium: botDiff = Difficulty.Hard
       
       ai.difficulty = botDiff
-      ai.speedMultiplier = 0.9f + rand(0.2f) # 0.9 to 1.1 multiplier
+      ai.speedMultiplier = 0.9f + rand(0.2f)
       ai.name = if i < BOT_NAMES.len: BOT_NAMES[i] else: &"BOT {i+1}"
       state.aiCars.add(ai)
   echo &"Spawned {state.aiCars.len} bots"
+
+proc initPowerups*(state: var State) =
+  state.nitroPowerups = @[]
+  if state.pathNodes.len > 20:
+    for i in countup(10, state.pathNodes.len - 1, 20):
+      state.nitroPowerups.add(state.pathNodes[i] + vec3(0, 0.5, 0))
 
 proc restartLevel*(state: var State) =
   if state.gameState == GameState.MainMenu:
@@ -161,9 +166,12 @@ proc restartLevel*(state: var State) =
   state.isReplaying = false
   state.tofuIntegrity = 1.0
   state.raceFinished = false
+  state.isBoosting = false
+  state.boostAmount = 0.5
 
   if state.gameState == GameState.Playing:
     initBots(state)
+    initPowerups(state)
 
   echo "Level Restarted"
 

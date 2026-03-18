@@ -33,6 +33,7 @@ proc makeCircularTexture*(size: int, alphaMultiplier: float32 = 255.0): sg.Image
 proc initParticleTexture*(state: var State) =
   state.particleTexture = makeCircularTexture(32, 255.0)
   state.checkpointTexture = makeCircularTexture(64, 100.0)
+  state.nitroTexture = makeCircularTexture(48, 255.0) # Nitro pickup texture
 
 proc emitParticle*(state: var State, pos, vel: Vec3, color: uint32, life: float32) =
   let idx = state.particles.nextIndex

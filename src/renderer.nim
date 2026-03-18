@@ -210,6 +210,29 @@ proc drawCheckpoints*(state: var State, proj, view: Mat4) =
   sg.applyUniforms(spr.ubFsParams, sg.Range(addr: fsParams.addr, size: fsParams.sizeof))
   sg.draw(0, 6, 1)
 
+proc drawPowerups*(state: var State, proj, view: Mat4) =
+  if state.nitroPowerups.len == 0: return
+  
+  sg.applyPipeline(state.pipSprite)
+  var fsParams = spr.FsParams(u_fogColor: vec3(0.25f, 0.5f, 0.75f), u_fogNear: 50.0f, u_fogFar: 150.0f, u_alphaThreshold: 0.01f)
+  sg.applyUniforms(spr.ubFsParams, sg.Range(addr: fsParams.addr, size: fsParams.sizeof))
+
+  var bindings = Bindings()
+  bindings.vertexBuffers[0] = state.quadVBuf
+  bindings.indexBuffer = state.quadIBuf
+  bindings.images[spr.imgUTexture] = state.nitroTexture
+  bindings.samplers[spr.smpUSampler] = state.shadowSampler
+  sg.applyBindings(bindings)
+
+  for pos in state.nitroPowerups:
+    let s = 1.5f + sin(state.time * 5.0) * 0.2f # Pulsing scale
+    let rot = rotate(state.time * 3.0, vec3(0, 1, 0))
+    let model = translate(pos + vec3(0, 1.0, 0)) * rot * scale(vec3(s, s, s))
+    
+    var vsParams = spr.VsParams(u_mvp: proj * view * model, u_camPos: state.cameraPos, u_jitterAmount: 240.0)
+    sg.applyUniforms(spr.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
+    sg.draw(0, 6, 1)
+
 proc drawShadow*(state: var State, proj, view: Mat4) =
   let surfaceHitOpt = getSurfaceInfo(state, state.player.position)
   if surfaceHitOpt.isNone: return
