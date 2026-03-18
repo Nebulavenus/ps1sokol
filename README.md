@@ -1,69 +1,81 @@
-## IGNITE YOUR NOSTALGIA: The Ultimate PS1-Style Arcade Racer Has Arrived!
+# PS1 Sokol Racer
 
-Quick Vibe Coding Experiment to develop game in Nim + Sokol
+**PS1 Sokol Racer** is a high-speed, arcade-style 3D racing game built with Nim and the Sokol framework. It meticulously recreates the iconic "Retro 3D" aesthetic of the 32-bit era, complete with the technical quirks and visual charm of the original PlayStation.
 
-Play game on [itch.io](https://abyss-inhabitant.itch.io/arcade-ps1-style-racing-game)
-
-To compile from source you need Nim 2.2.4 and sokol-nim@07bd978
-
-Prepare for a turbocharged blast from the past with **[Your Game's Name Here]**! Immerse yourself in the gritty, low-fidelity glory of the 32-bit era, reimagined with meticulous attention to detail and modern performance. This isn't just a game; it's a love letter to the golden age of polygon racing!
+[![Itch.io](https://img.shields.io/badge/Play%20on-Itch.io-FA5C5C?style=for-the-badge&logo=itchdotio)](https://abyss-inhabitant.itch.io/arcade-ps1-style-racing-game)
 
 AI Overview [deepwiki](https://deepwiki.com/Nebulavenus/ps1sokol)
 
 ---
 
-### **Experience Authentic PS1 Aesthetics!**
+## 🏎️ Authentic PS1 Aesthetics
 
-We've painstakingly crafted a visual experience that captures the raw charm and technical quirks of your favorite PlayStation 1 classics:
+Experience a visual style that captures the raw charm of 1990s hardware:
 
-*   **Signature "Wobble" Effect:** Witness the iconic vertex jitter as objects subtly shift, a true homage to the PlayStation's GTE precision.
-*   **Affine Texture "Swimming":** Relish in the classic "swimming" textures, where surfaces deform and stretch, adding to the unique visual character.
-*   **Crisp Low-Poly Models:** Drive beautifully blocky cars and race across tracks built with purposeful polygon budgets, reminiscent of the era's hardware limitations.
-*   **Vibrant 15-bit Color & Dithering:** Our custom color quantization and Bayer matrix dithering bring the 32-bit color palette to life with authentic, pixelated gradients.
-*   **Immersive Distance Fog:** Lose yourself in the atmospheric depth provided by adjustable fog, a classic PS1 technique for concealing draw distance limits.
-*   **Revolutionary Pre-Baked Lighting:** Experience surprisingly dynamic lighting with custom pre-baked **Bent Normals**. This advanced technique provides nuanced ambient occlusion, realistic sky light, and ground bounce, elevating the low-poly aesthetic with sophisticated, era-appropriate shading.
+*   **Signature Vertex Jitter:** Emulates the GTE's fixed-point precision limits, causing vertices to subtly snap and shift as you move.
+*   **Affine Texture Mapping:** Linear texture interpolation (without perspective correction) creates the classic "texture wobble" seen on PS1.
+*   **15-bit Color & Ordered Dithering:** Uses a 4x4 Bayer matrix to emulate low color depth, resulting in authentic pixelated gradients.
+*   **Pre-Baked Ambient Occlusion:** Advanced **Bent Normal** calculation provides sophisticated shading (Sky/Ground light bounce) without runtime cost.
+*   **Low-Poly Mastery:** Optimized models and environment assets designed to fit within tight polygon budgets while maintaining a cohesive look.
 
----
+## 🛠️ Technical Architecture
 
-### **Feel the Rush: Dynamic Gameplay!**
+The project has been recently refactored for high modularity and maintainability:
 
-Get behind the wheel with an arcade-focused physics system designed for pure fun and visceral control:
+- **Modular Design:** Decomposed into specialized units (Renderer, UI, Physics, AI, Particles, Events, etc.) to keep the codebase clean and efficient.
+- **Custom Asset Pipeline:** Features custom PLY/OBJ loaders with integrated AO baking and support for the **QOI** (Image) and **QOA** (Audio) formats.
+- **Spatial Partitioning:** Uses a **Uniform Grid** structure for high-performance collision detection and ground-following.
+- **Post-Processing:** Includes a custom CRT/Scanline post-processing pass for that final cathode-ray tube feeling.
 
-*   **Responsive Arcade Physics:** Enjoy a simple, yet engaging physics model that lets you feel every acceleration, brake, and turn.
-*   **Fluid Chase Camera:** A smart, dynamic chase camera keeps the action perfectly in view, smoothly following your every move as you tear up the track.
-*   **Master the Drift:** Unleash satisfying drifts with a dedicated mechanic that lets you slide through corners, leaving behind a trail of smoke and screeching tires!
+For a deep dive into the engine, see [docs/architecture.md](docs/architecture.md).
 
----
+## 🎮 Controls
 
-### **Immersive Soundscape!**
+### **Driving**
+- **Accelerate:** `W` / `UP`
+- **Brake / Reverse:** `S` / `DOWN`
+- **Steer:** `A` / `D` or `LEFT` / `RIGHT`
+- **Drift:** `SPACE`
+- **Reset at Checkpoint:** `R`
+- **Toggle Camera (Follow/Front):** `C`
 
-Beyond the visuals, the audio pulls you deeper into the retro experience:
+### **System & Audio**
+- **Pause / Back:** `ESC` / `TAB`
+- **Menu Confirm:** `ENTER`
+- **Next / Previous Track:** `N` / `B`
+- **Toggle Music:** `M`
+- **Adjust Volume:** `9` / `0`
+- **Toggle Replay:** `P`
 
-*   **Procedural Engine Roar:** Hear your engine rev and groan with a dynamic, procedurally generated sound that reacts to your speed and acceleration, just like the real deal!
-*   **Satisfying Tire Screeches:** Lock up your tires and initiate a drift to trigger a distinct, procedural screech sound that adds a layer of raw authenticity to every slide.
-
----
-
-### **Under the Hood: Precision & Performance!**
-
-Developed with a robust, custom pipeline:
-
-*   **Offline Asset Baking:** Models are pre-processed and optimized offline, ensuring buttery-smooth performance.
-*   **Efficient Caching:** Fast loading times mean more time racing, less time waiting!
-
----
-
-### **Controls:**
-
-*   **Accelerate:** `W`
-*   **Brake / Reverse:** `S`
-*   **Steer Left:** `A`
-*   **Steer Right:** `D`
-*   **Reset Car:** `R`
-*   **Drift:** `SPACEBAR` (or `LShift`)
-*   **Quit Game:** `ESC`
-*   **Control AO:** `0123456`
+### **Debug (AO Controls)**
+- **AO Strength:** `1` / `2`
+- **Sky Intensity:** `3` / `4`
+- **Ground Intensity:** `5` / `6`
 
 ---
 
-**[Your Game's Name Here]** is more than just a throwback; it's a playable slice of gaming history, crafted with passion and powered by clever techniques. Get ready to put the pedal to the pixel and race like it's 1997!
+## 🚀 Building from Source
+
+To compile from source you need Nim 2.2.4 and sokol-nim@07bd978
+
+### **Prerequisites**
+- **Nim 2.0+**
+- **Sokol-nim** (Ensure dependencies are installed for your OS)
+
+### **Compilation**
+To build the project for your native platform:
+
+```bash
+nimble build
+```
+
+The resulting `main.exe` (or `main` on Unix) will be created in the root directory.
+
+---
+
+## 📜 Recent Changes
+For the latest updates, including the major modular refactor and scene transition improvements, check out the [Session Changelog (10.MD)](docs/10.MD).
+
+---
+
+*PS1 Sokol Racer is more than just a throwback; it's a playable slice of gaming history, crafted with passion and powered by clever techniques. Get ready to put the pedal to the pixel!*

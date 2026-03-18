@@ -44,9 +44,13 @@ proc extractPathFromRoadMesh*(vertices: seq[Vertex], indices: seq[uint16]): seq[
     
     for i in 0 ..< rawNodes.len:
       if visited[i]: continue
-      let d = len(rawNodes[i] - currentPos)
-      if d < closestDist and d > 5.0:
-        closestDist = d
+      # Height-aware distance: penalize vertical distance to stay on the current road level
+      let dx = rawNodes[i].x - currentPos.x
+      let dy = rawNodes[i].y - currentPos.y
+      let dz = rawNodes[i].z - currentPos.z
+      let dWeighted = sqrt(dx*dx + dz*dz + dy*dy * 25.0) 
+      if dWeighted < closestDist and dWeighted > 5.0:
+        closestDist = dWeighted
         closestIdx = i
     
     if closestIdx != -1:
@@ -55,8 +59,12 @@ proc extractPathFromRoadMesh*(vertices: seq[Vertex], indices: seq[uint16]): seq[
       let anchor = rawNodes[closestIdx]
       for i in 0 ..< rawNodes.len:
         if visited[i]: continue
-        let d = len(rawNodes[i] - anchor)
-        if d < 25.0:
+        # Only average triangles that are horizontally close AND at a similar height
+        let dx = rawNodes[i].x - anchor.x
+        let dz = rawNodes[i].z - anchor.z
+        let dy = rawNodes[i].y - anchor.y
+        let distHorizSq = dx*dx + dz*dz
+        if distHorizSq < 20.0*20.0 and abs(dy) < 5.0:
           sum = sum + rawNodes[i]
           count += 1
           visited[i] = true

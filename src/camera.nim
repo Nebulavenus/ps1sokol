@@ -32,9 +32,18 @@ proc updateCamera*(state: var State, dt: float32) =
     state.cameraPos = lerpV(state.cameraPos, desiredCamPos, 0.1)
     state.cameraTarget = lerpV(state.cameraTarget, targetPos + vec3(0, 1.5, 0), 0.2)
   else:
-    # Front camera
+    # Front camera (Bumper/Hood)
     let targetPos = state.player.position
     let carRot = state.player.rotation
-    let frontDir = carRot * vec3(0, 0, -1)
-    state.cameraPos = targetPos + (frontDir * 8.0) + vec3(0, 3.0, 0)
-    state.cameraTarget = targetPos
+    
+    # Position slightly forward on the hood/bumper
+    let camOffset = vec3(0.0, 0.8, -0.5) 
+    # Target way in front to look forward
+    let targetOffset = vec3(0.0, 0.6, -10.0)
+    
+    let desiredCamPos = targetPos + (carRot * camOffset)
+    let desiredCamTarget = targetPos + (carRot * targetOffset)
+    
+    # Use faster smoothing for first-person feel
+    state.cameraPos = lerpV(state.cameraPos, desiredCamPos, 0.5)
+    state.cameraTarget = lerpV(state.cameraTarget, desiredCamTarget, 0.5)
