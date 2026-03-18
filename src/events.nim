@@ -90,11 +90,10 @@ proc event*(e: ptr sapp.Event, state: var State) =
       elif state.gameState == GameState.CarSelection:
         state.gameState = GameState.RaceSetup
         state.menu.selectedItem = 0
-        state.menu.itemCount = 4 # MODE, OPPONENTS, DIFFICULTY, START
+        state.menu.itemCount = 3 # MODE, OPPONENTS, DIFFICULTY
       elif state.gameState == GameState.RaceSetup:
-        if state.menu.selectedItem == 3: # START RACE
-          state.gameState = GameState.Playing
-          restartLevel(state)
+        state.gameState = GameState.Playing
+        restartLevel(state)
       elif state.gameState == GameState.Paused:
         case state.menu.selectedItem
         of 0: state.gameState = GameState.Playing # RESUME

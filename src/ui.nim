@@ -82,7 +82,6 @@ proc drawUI*(state: var State, proj, view: Mat4, canvasW, canvasH: float32) =
       &"MODE: {state.gameMode}",
       &"OPPONENTS: {state.aiCount}",
       &"DIFFICULTY: {state.aiDifficulty}",
-      "START RACE"
     ]
 
     for i, item in items:
@@ -98,6 +97,8 @@ proc drawUI*(state: var State, proj, view: Mat4, canvasW, canvasH: float32) =
     sdtx.color3f(0.5, 0.5, 0.5)
     sdtx.puts("A/D - ADJUST VALUES")
     sdtx.pos(uiX, uiY + 16.5)
+    sdtx.puts("ENTER - START RACE")
+    sdtx.pos(uiX, uiY + 18.0)
     sdtx.puts("ESC - BACK TO CAR SELECTION")
 
   elif state.gameState == GameState.Paused:
@@ -136,12 +137,15 @@ proc drawUI*(state: var State, proj, view: Mat4, canvasW, canvasH: float32) =
       ("A / LEFT", "STEER LEFT"),
       ("D / RIGHT", "STEER RIGHT"),
       ("SPACE", "DRIFT"),
+      ("L-SHIFT", "NITRO"),
       ("R", "RESPAWN AT CHECKPOINT"),
       ("C", "TOGGLE CAMERA"),
       ("ESC / TAB", "PAUSE MENU"),
       ("M", "TOGGLE MUSIC"),
+      ("9 / 0", "VOLUME DOWN/UP"),
       ("N / B", "NEXT / PREV TRACK"),
       ("P", "TOGGLE REPLAY"),
+      ("1 - 6", "LIGHTING ADJ"),
     ]
     
     for i, ctrl in controls:

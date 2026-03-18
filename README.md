@@ -36,6 +36,7 @@ For a deep dive into the engine, see [docs/architecture.md](docs/architecture.md
 - **Brake / Reverse:** `S` / `DOWN`
 - **Steer:** `A` / `D` or `LEFT` / `RIGHT`
 - **Drift:** `SPACE`
+- **Nitro:** `L-SHIFT`
 - **Reset at Checkpoint:** `R`
 - **Toggle Camera (Follow/Front):** `C`
 
