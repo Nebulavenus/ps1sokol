@@ -55,9 +55,11 @@ proc event*(e: ptr sapp.Event, state: var State) =
       elif state.gameState == GameState.CarSelection:
         state.selectedCarIdx = (state.selectedCarIdx + state.availableCars.len - 1) mod state.availableCars.len
       elif state.gameState == GameState.RaceSetup:
-        if state.menu.selectedItem == 0: # OPPONENTS
+        if state.menu.selectedItem == 0: # MODE
+          state.gameMode = if state.gameMode == GameMode.StandardRace: GameMode.TofuDelivery else: GameMode.StandardRace
+        elif state.menu.selectedItem == 1: # OPPONENTS
           state.aiCount = max(0, state.aiCount - 1)
-        elif state.menu.selectedItem == 1: # DIFFICULTY
+        elif state.menu.selectedItem == 2: # DIFFICULTY
           if state.aiDifficulty == Difficulty.Medium: state.aiDifficulty = Difficulty.Easy
           elif state.aiDifficulty == Difficulty.Hard: state.aiDifficulty = Difficulty.Medium
     of keyCodeD, keyCodeRight:
@@ -69,9 +71,11 @@ proc event*(e: ptr sapp.Event, state: var State) =
       elif state.gameState == GameState.CarSelection:
         state.selectedCarIdx = (state.selectedCarIdx + 1) mod state.availableCars.len
       elif state.gameState == GameState.RaceSetup:
-        if state.menu.selectedItem == 0: # OPPONENTS
+        if state.menu.selectedItem == 0: # MODE
+          state.gameMode = if state.gameMode == GameMode.StandardRace: GameMode.TofuDelivery else: GameMode.StandardRace
+        elif state.menu.selectedItem == 1: # OPPONENTS
           state.aiCount = min(10, state.aiCount + 1)
-        elif state.menu.selectedItem == 1: # DIFFICULTY
+        elif state.menu.selectedItem == 2: # DIFFICULTY
           if state.aiDifficulty == Difficulty.Easy: state.aiDifficulty = Difficulty.Medium
           elif state.aiDifficulty == Difficulty.Medium: state.aiDifficulty = Difficulty.Hard
     of keyCodeEnter, keyCodeSpace:
@@ -86,9 +90,9 @@ proc event*(e: ptr sapp.Event, state: var State) =
       elif state.gameState == GameState.CarSelection:
         state.gameState = GameState.RaceSetup
         state.menu.selectedItem = 0
-        state.menu.itemCount = 3 # OPPONENTS, DIFFICULTY, START
+        state.menu.itemCount = 4 # MODE, OPPONENTS, DIFFICULTY, START
       elif state.gameState == GameState.RaceSetup:
-        if state.menu.selectedItem == 2: # START RACE
+        if state.menu.selectedItem == 3: # START RACE
           state.gameState = GameState.Playing
           restartLevel(state)
       elif state.gameState == GameState.Paused:

@@ -79,6 +79,7 @@ proc drawUI*(state: var State, proj, view: Mat4, canvasW, canvasH: float32) =
     sdtx.puts("RACE SETUP")
 
     let items = [
+      &"MODE: {state.gameMode}",
       &"OPPONENTS: {state.aiCount}",
       &"DIFFICULTY: {state.aiDifficulty}",
       "START RACE"
@@ -182,6 +183,34 @@ proc drawUI*(state: var State, proj, view: Mat4, canvasW, canvasH: float32) =
     sdtx.puts(&"TIME {currentLapTime:5.2f}")
     sdtx.pos(1, 5)
     sdtx.puts(&"BEST {state.bestLapTime:5.2f}")
+
+    if state.gameMode == GameMode.TofuDelivery:
+      sdtx.pos(1, 7)
+      sdtx.color3f(1.0, 1.0, 1.0)
+      sdtx.puts(">> TOFU INTEGRITY")
+      
+      let integrity = state.tofuIntegrity
+      let barLen = 20
+      let filled = int(integrity * barLen.float)
+      var barStr = ""
+      for b in 0..<barLen:
+        if b < filled: barStr.add("|")
+        else: barStr.add(".")
+      
+      sdtx.pos(1, 8)
+      if integrity > 0.5: sdtx.color3f(0.2, 1.0, 0.4)
+      elif integrity > 0.2: sdtx.color3f(1.0, 1.0, 0.0)
+      else: sdtx.color3f(1.0, 0.0, 0.0)
+      sdtx.puts(&"[{barStr}] {integrity*100:3.0f}%")
+
+      if state.raceFinished:
+        sdtx.pos(10, 12)
+        sdtx.color3f(0.0, 1.0, 0.0)
+        sdtx.puts("DELIVERY COMPLETE!")
+      elif state.tofuIntegrity <= 0.0:
+        sdtx.pos(10, 12)
+        sdtx.color3f(1.0, 0.0, 0.0)
+        sdtx.puts("DELIVERY FAILED - TOFU SMASHED!")
 
     let audioX = gridW - 16.0
     sdtx.pos(audioX, 2)

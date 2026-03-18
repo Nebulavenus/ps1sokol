@@ -120,6 +120,9 @@ proc init() {.cdecl.} =
 
   state.aiCount = 3
   state.aiDifficulty = Difficulty.Medium
+  state.gameMode = GameMode.StandardRace
+  state.tofuIntegrity = 1.0
+  state.raceFinished = false
 
   loadLevel(state, ASSETS_FS, "map2")
 
@@ -145,7 +148,9 @@ proc frame() {.cdecl.} =
   let currentCar = if state.availableCars.len > 0: state.availableCars[state.selectedCarIdx] else: CarConfig()
 
   if state.gameState == GameState.Playing:
-    updateAI(state, dt)
+    if not state.raceFinished and state.tofuIntegrity > 0.0:
+      updateAI(state, dt)
+    
     block VehiclePhysics:
       let engineForce = currentCar.engineForce
       let brakeForce = currentCar.brakeForce
@@ -159,9 +164,12 @@ proc frame() {.cdecl.} =
       const speedForMaxTurnDampening = 40.0
       let prevVelocity = state.player.velocity
       let forwardDir = state.player.rotation * vec3(0, 0, -1)
-      if state.input.accelerate:
+      
+      let canMove = not state.raceFinished and state.tofuIntegrity > 0.0
+      
+      if state.input.accelerate and canMove:
         state.player.velocity += forwardDir * engineForce * dt
-      if state.input.brake:
+      if state.input.brake and canMove:
         if len(state.player.velocity) > 5.0:
           state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
         else:
@@ -174,11 +182,11 @@ proc frame() {.cdecl.} =
       let currentSpeed1 = len(state.player.velocity)
       let turnDampeningFactor = clamp(currentSpeed1 / speedForMaxTurnDampening, 0.0, 1.0)
       var effectiveTurningTorque = lerp(lowSpeedTurnTorque, highSpeedTurnTorque, turnDampeningFactor)
-      if state.input.drift:
+      if state.input.drift and canMove:
         effectiveTurningTorque *= driftTurningMultiplier
-      if state.input.turnLeft:
+      if state.input.turnLeft and canMove:
         state.player.angularVelocity += effectiveTurningTorque * dt
-      if state.input.turnRight:
+      if state.input.turnRight and canMove:
         state.player.angularVelocity -= effectiveTurningTorque * dt
       var currentDrag = drag
       if state.input.drift:
@@ -196,6 +204,16 @@ proc frame() {.cdecl.} =
         if velAlongNormal < 0:
           state.player.velocity = state.player.velocity * 0.95
           state.player.velocity -= wallNormal * velAlongNormal * 1.05
+          
+          # Tofu penalty
+          if state.gameMode == GameMode.TofuDelivery and not state.raceFinished:
+            let impactForce = abs(velAlongNormal)
+            if impactForce > 5.0:
+              state.tofuIntegrity = max(0.0, state.tofuIntegrity - 0.1)
+              if state.tofuIntegrity <= 0.0:
+                # Failure logic could go here, but for now we just show UI
+                discard
+
       state.player.position = nextPosition
       var surfaceUp = vec3.up()
       let surfaceInfoOpt = getSurfaceInfo(state, state.player.position)
@@ -261,6 +279,9 @@ proc frame() {.cdecl.} =
             if state.bestLapTime == 0.0 or state.lastLapTime < state.bestLapTime:
               state.bestLapTime = state.lastLapTime
             state.lapStartTime = state.time
+            
+            if state.gameMode == GameMode.TofuDelivery:
+              state.raceFinished = true
 
       if state.isReplaying:
         if state.replayBuffer.len > 0:

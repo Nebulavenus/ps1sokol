@@ -159,6 +159,8 @@ proc restartLevel*(state: var State) =
   state.lastLapTime = 0.0
   state.replayBuffer = @[]
   state.isReplaying = false
+  state.tofuIntegrity = 1.0
+  state.raceFinished = false
 
   if state.gameState == GameState.Playing:
     initBots(state)

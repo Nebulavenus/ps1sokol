@@ -91,6 +91,10 @@ type
     Follow,
     Front
 
+  GameMode* = enum
+    StandardRace,
+    TofuDelivery
+
   GameState* = enum
     MainMenu,
     CarSelection,
@@ -203,6 +207,9 @@ type
     # Race Setup
     aiCount*: int
     aiDifficulty*: Difficulty
+    gameMode*: GameMode
+    tofuIntegrity*: float32
+    raceFinished*: bool
 
   SurfaceHit* = object
     pos*: Vec3
