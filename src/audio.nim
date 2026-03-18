@@ -7,7 +7,7 @@ import streams
 import strformat
 import strutils
 import std/os
-import rtfs, qoa
+import rtfs, qoa, types
 
 const
   DEFAULT_MUSIC_VOLUME = 1.0 # Default music volume (0.0 to 1.0)
@@ -115,10 +115,15 @@ proc audioInit*() =
 proc audioShutdown*() =
   saudio.shutdown()
 
-proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool, debugSpeed: var float32, debugRpm: var float32, debugGear: var int32) =
-  # Map car speed to target RPM (adjust these ranges to taste)
-  const minRpm = 1000.0 # Idle RPM
-  const maxRpm = 6000.0 # Redline RPM
+proc updateEngineSound*(car: CarConfig, carSpeed: float32, carAccel: float32, isDrifting: bool, debugSpeed: var float32, debugRpm: var float32, debugGear: var int32) =
+  # Safety check for uninitialized car config
+  if car.gears <= 0 or car.maxSpeed <= 0.001: return
+
+  # Map car speed to target RPM
+  let minRpm = 1000.0f # Idle RPM
+  let maxRpm = car.maxRpm
+  let upshiftRpm = maxRpm * 0.9f
+  let downshiftRpm = maxRpm * 0.4f
 
   # --- 1. Update Gear Shift Timer ---
   if audioState.gearShiftTimer > 0.0:
@@ -126,84 +131,63 @@ proc updateEngineSound*(carSpeed: float32, carAccel: float32, isDrifting: bool, 
 
   # --- 2. Gear Shifting Logic ---
   if audioState.gearShiftTimer <= 0.0:
-    # Upshift: When RPM is high and we are accelerating
-    # --- Changed > to >= to allow shifting at the exact UPSHIFT_RPM ---
-    if audioState.currentRpm >= UPSHIFT_RPM and carAccel > 0.1 and audioState.currentGear < NUM_GEARS:
+    if audioState.currentRpm >= upshiftRpm and carAccel > 0.1 and audioState.currentGear < car.gears:
       audioState.currentGear += 1
       audioState.gearShiftTimer = GEAR_SHIFT_COOLDOWN
-      # Drop RPM to simulate the gear change
-      audioState.currentRpm = DOWNSHIFT_RPM + 500.0
-
-    # Downshift: When RPM is low or braking
-    elif audioState.currentRpm < DOWNSHIFT_RPM and audioState.currentGear > 1:
+      audioState.currentRpm = downshiftRpm + 500.0
+    elif audioState.currentRpm < downshiftRpm and audioState.currentGear > 1:
       if carSpeed > 1.0 or (carAccel < -0.5 and carSpeed > 5.0):
         audioState.currentGear -= 1
         audioState.gearShiftTimer = GEAR_SHIFT_COOLDOWN
-        # Jump RPM to simulate the downshift
-        audioState.currentRpm = (UPSHIFT_RPM + DOWNSHIFT_RPM) / 2
+        audioState.currentRpm = (upshiftRpm + downshiftRpm) / 2
 
   # --- 3. Calculate Target RPM based on Gear and Speed ---
-  let currentGear = audioState.currentGear
-  let minGearSpeed = GEAR_MIN_SPEED[currentGear]
-  let maxGearSpeed = GEAR_MAX_SPEED[currentGear]
-  let gearSpeedRange = max(0.001, maxGearSpeed - minGearSpeed) # Avoid div by zero
+  # Simple dynamic gear ratio estimation
+  if car.gears == 0: return
+  let gearRatio = car.maxSpeed / car.gears.float32
+  let minGearSpeed = (audioState.currentGear - 1).float32 * gearRatio * 0.8
+  let maxGearSpeed = audioState.currentGear.float32 * gearRatio
+  let gearSpeedRange = max(0.001, maxGearSpeed - minGearSpeed)
 
-  # Calculate how far "through" the current gear we are based on speed
-  # --- Removed clamp() to allow for "over-revving", making shifting more reliable ---
   let speedInGearNormalized = (abs(carSpeed) - minGearSpeed) / gearSpeedRange
+  var baseTargetRpm = minRpm + (upshiftRpm - minRpm) * speedInGearNormalized
 
-  # Map this normalized value to the RPM range for the gear
-  var baseTargetRpm = minRpm + (UPSHIFT_RPM - minRpm) * speedInGearNormalized
-
-  # Optional: Log the values to debug
-  #echo(&"SpeedNorm: {speedInGearNormalized:3.2f} BaseRPM: {baseTargetRpm:5.1f} Vel: {carSpeed:3.1f} - Gear: {currentGear}")
-  # Temporary here for debug ui
   debugSpeed = carSpeed
   debugRpm = baseTargetRpm
-  debugGear = currentGear.int32
+  debugGear = audioState.currentGear.int32
 
   # --- Final RPM adjustments (Drift, etc.) ---
   if isDrifting: baseTargetRpm = min(maxRpm, baseTargetRpm + DRIFT_RPM_BOOST)
   audioState.targetRpm = clamp(baseTargetRpm, minRpm, maxRpm)
 
-  # Smoothly interpolate current RPM towards target RPM for less jarring changes
-  const rpmSmoothingFactor = 4.0 # How fast currentRpm catches up to targetRpm
+  const rpmSmoothingFactor = 4.0
   audioState.currentRpm = lerp(audioState.currentRpm, audioState.targetRpm, clamp(sapp.frameDuration() * rpmSmoothingFactor, 0.0, 1.0))
 
-  # Convert RPM to a base frequency (fundamental)
-  const freqPerRpm = 0.028 # Tune this to get desired pitch range
-  audioState.engineFrequency = audioState.currentRpm * freqPerRpm
+  # Use car-specific pitch parameters
+  let freqPerRpm = car.pitchMultiplier * 0.028 # Scale existing multiplier
+  audioState.engineFrequency = (audioState.currentRpm * freqPerRpm) + car.baseIdlePitch
 
   # --- Dynamic Sound Shaping ---
-  # Normalize RPM to a 0-1 range for blending harmonic levels
-  let rpmNormalized = (audioState.currentRpm - minRpm) / (maxRpm - minRpm)
-  let blendFactor = clamp(rpmNormalized, 0.0, 1.0)
+  let rpmNorm = (audioState.currentRpm - minRpm) / (maxRpm - minRpm)
+  let blendFactor = clamp(rpmNorm, 0.0, 1.0)
 
-  # Interpolate harmonic volumes between low and high RPM states
   for i in 0..<MAX_HARMONICS:
     audioState.harmonicsVolumes[i] = lerp(HARMONIC_LEVELS_LOW_RPM[i], HARMONIC_LEVELS_HIGH_RPM[i], blendFactor)
 
-  # Noise increases with RPM (more mechanical noise at higher revs)
   audioState.engineNoiseVolume = 0.05 + 0.15 * blendFactor
-  audioState.engineNoiseVolume = clamp(audioState.engineNoiseVolume, 0.0, 0.2) # Clamp noise to prevent it dominating
+  audioState.engineNoiseVolume = clamp(audioState.engineNoiseVolume, 0.0, 0.2)
 
-  # Modulate overall volume based on acceleration and speed
   const baseVolume = 0.2
-  const accelVolumeBoost = 0.5 # How much acceleration impacts volume
-  const minSpeedVolume = 0.1 # Minimum volume even when stopped
+  const accelVolumeBoost = 0.5
+  const minSpeedVolume = 0.1
 
-  # Basic volume scales with speed
-  let speedVolume = minSpeedVolume + (1.0 - minSpeedVolume) * clamp(abs(carSpeed) / GAME_MAX_SPEED, 0.0, 1.0)
-
-  # Boost volume on acceleration
+  let speedVolume = minSpeedVolume + (1.0 - minSpeedVolume) * clamp(abs(carSpeed) / car.maxSpeed, 0.0, 1.0)
   let finalVolume = speedVolume + clamp(carAccel * accelVolumeBoost, 0.0, 0.8)
   audioState.engineVolume = clamp(finalVolume * baseVolume, 0.0, 1.0)
 
-  # --- ADD DRIFTING SCREECH VOLUME LOGIC ---
   let targetScreechVolume = if isDrifting and abs(carSpeed) > 0.5: MAX_SCREECH_VOLUME else: 0.0
   let smoothingSpeed = if isDrifting: SCREECH_ATTACK_SPEED else: SCREECH_DECAY_SPEED
   audioState.currentScreechVolume = lerp(audioState.currentScreechVolume, targetScreechVolume, clamp(sapp.frameDuration() * smoothingSpeed, 0.0, 1.0))
-  # --- END DRIFTING SCREECH VOLUME LOGIC ---
 
 proc loadMusic*(fs: rtfs.RuntimeFS, filename: string) =
   let musicDataOpt = fs.get(filename)

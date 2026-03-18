@@ -611,13 +611,76 @@ proc init() {.cdecl.} =
   
   loadMusicPlaylist(ASSETS_FS, "music")
   
-  let carTexture = loadTexture(state, ASSETS_FS, "car"/"trueno.qoi")
+  # Define available cars
+  state.availableCars = @[
+    CarConfig(
+      name: "TRUENO GT",
+      modelPath: "car"/"trueno.ply",
+      texturePath: "car"/"trueno.qoi",
+      engineForce: 28.0,
+      brakeForce: 25.0,
+      maxSpeed: 32.0,
+      baseGrip: 0.96,
+      turnTorque: 90.0,
+      baseIdlePitch: 0.0,
+      pitchMultiplier: 1.0,
+      maxRpm: 7500.0,
+      gears: 5
+    ),
+    CarConfig(
+      name: "SILVIA S13",
+      modelPath: "car"/"silvia.ply",
+      texturePath: "car"/"silvia.qoi",
+      engineForce: 35.0,
+      brakeForce: 30.0,
+      maxSpeed: 40.0,
+      baseGrip: 0.98,
+      turnTorque: 110.0,
+      baseIdlePitch: 5.0,
+      pitchMultiplier: 1.2,
+      maxRpm: 9000.0,
+      gears: 6
+    ),
+    CarConfig(
+      name: "LADA DRIFT",
+      modelPath: "car"/"lada.ply",
+      texturePath: "car"/"lada.qoi",
+      engineForce: 30.0,
+      brakeForce: 22.0,
+      maxSpeed: 30.0,
+      baseGrip: 0.85, # Lower grip
+      turnTorque: 130.0, # High torque
+      baseIdlePitch: -5.0,
+      pitchMultiplier: 0.9,
+      maxRpm: 6500.0,
+      gears: 5
+    )
+  ]
+  state.selectedCarIdx = 0
+
+  # Load Car Meshes
   let aoParams = AOBakeParams(numRays: 64, maxDistance: 2.0, intensity: 1.0, bias: 0.001)
   let pointSmp = sg.makeSampler(sg.SamplerDesc(minFilter: filterNearest, magFilter: filterNearest))
   
-  state.carMesh1 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno.ply", aoParams, carTexture, pointSmp)
-  state.carMesh2 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_back.ply", aoParams, carTexture, pointSmp)
-  state.carMesh3 = loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_front.ply", aoParams, carTexture, pointSmp)
+  # 1. TRUENO (special case: 3 parts)
+  let truenoTex = loadTexture(state, ASSETS_FS, "car"/"trueno.qoi")
+  var truenoMeshes: seq[Mesh]
+  truenoMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno.ply", aoParams, truenoTex, pointSmp)
+  truenoMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_back.ply", aoParams, truenoTex, pointSmp)
+  truenoMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_front.ply", aoParams, truenoTex, pointSmp)
+  state.carMeshes.add(truenoMeshes)
+
+  # 2. SILVIA
+  let silviaTex = loadTexture(state, ASSETS_FS, "car"/"silvia.qoi")
+  var silviaMeshes: seq[Mesh]
+  silviaMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"silvia.ply", aoParams, silviaTex, pointSmp)
+  state.carMeshes.add(silviaMeshes)
+
+  # 3. LADA
+  let ladaTex = loadTexture(state, ASSETS_FS, "car"/"lada.qoi")
+  var ladaMeshes: seq[Mesh]
+  ladaMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"lada.ply", aoParams, ladaTex, pointSmp)
+  state.carMeshes.add(ladaMeshes)
   
   loadLevel(state, ASSETS_FS, "map2")
   
@@ -720,19 +783,15 @@ proc updateCamera(state: var State, dt: float32) =
     state.cameraPos = targetPos + (frontDir * 8.0) + vec3(0, 3.0, 0)
     state.cameraTarget = targetPos
 
-proc drawVehicle(proj, view, model: Mat4, camPos: Vec3) =
+proc drawVehicle(proj, view, model: Mat4, camPos: Vec3, carIdx: int) =
+  if carIdx < 0 or carIdx >= state.carMeshes.len: return
+  
   var vsParams = shd.VsParams(u_mvp: proj * view * model, u_model: model, u_camPos: camPos, u_jitterAmount: sapp.heightf())
-  sg.applyBindings(state.carMesh1.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
-  sg.draw(0, state.carMesh1.indexCount, 1)
   
-  sg.applyBindings(state.carMesh2.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
-  sg.draw(0, state.carMesh2.indexCount, 1)
-  
-  sg.applyBindings(state.carMesh3.bindings)
-  sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
-  sg.draw(0, state.carMesh3.indexCount, 1)
+  for mesh in state.carMeshes[carIdx]:
+    sg.applyBindings(mesh.bindings)
+    sg.applyUniforms(shd.ubVsParams, sg.Range(addr: vsParams.addr, size: vsParams.sizeof))
+    sg.draw(0, mesh.indexCount, 1)
 
 proc frame() {.cdecl.} =
   let dt = sapp.frameDuration()
@@ -749,19 +808,21 @@ proc frame() {.cdecl.} =
     sg.commit()
     return
 
+  let currentCar = if state.availableCars.len > 0: state.availableCars[state.selectedCarIdx] else: CarConfig()
+
   if state.gameState == GameState.Playing:
     updateAI(state, dt)
     # ... physics and logic ...
     block VehiclePhysics:
-      const engineForce = 25.0
-      const brakeForce = 20.0
+      let engineForce = currentCar.engineForce
+      let brakeForce = currentCar.brakeForce
       const drag = 0.8
       const angularDrag = 1.1
-      const baseGrip = 0.95
+      let baseGrip = currentCar.baseGrip
       const driftGripMultiplier = 0.3
       const driftTurningMultiplier = 2.2
-      const lowSpeedTurnTorque = 100.0
-      const highSpeedTurnTorque = 40.0
+      let lowSpeedTurnTorque = currentCar.turnTorque
+      let highSpeedTurnTorque = currentCar.turnTorque * 0.4
       const speedForMaxTurnDampening = 40.0
       let prevVelocity = state.player.velocity
       let forwardDir = state.player.rotation * vec3(0, 0, -1)
@@ -772,6 +833,12 @@ proc frame() {.cdecl.} =
           state.player.velocity -= norm(state.player.velocity) * brakeForce * dt
         else:
           state.player.velocity -= forwardDir * engineForce * dt
+      
+      # Speed limit
+      let currentSpd = len(state.player.velocity)
+      if currentSpd > currentCar.maxSpeed:
+        state.player.velocity = norm(state.player.velocity) * currentCar.maxSpeed
+
       let currentSpeed1 = len(state.player.velocity)
       let turnDampeningFactor = clamp(currentSpeed1 / speedForMaxTurnDampening, 0.0, 1.0)
       var effectiveTurningTorque = lerp(lowSpeedTurnTorque, highSpeedTurnTorque, turnDampeningFactor)
@@ -820,7 +887,7 @@ proc frame() {.cdecl.} =
 
       let currentSpeed = len(state.player.velocity)
       let carAccel = (currentSpeed - len(prevVelocity)) / dt
-      updateEngineSound(currentSpeed, carAccel, state.input.drift, state.debugSpeed, state.debugRpm, state.debugGear)
+      updateEngineSound(currentCar, currentSpeed, carAccel, state.input.drift, state.debugSpeed, state.debugRpm, state.debugGear)
       var currentGrip = baseGrip
       if state.input.drift:
         currentGrip *= driftGripMultiplier
@@ -889,8 +956,8 @@ proc frame() {.cdecl.} =
   
   if state.gameState == GameState.Playing:
     updateCamera(state, dt)
-  elif state.gameState == GameState.MainMenu:
-    # Rotating car and camera for Main Menu preview
+  elif state.gameState == GameState.MainMenu or state.gameState == GameState.CarSelection:
+    # Rotating car and camera for Main Menu / Selection preview
     let rotateSpeed = 60.0f # degrees per second
     state.player.yaw += rotateSpeed * dt
     if state.player.yaw >= 360.0: state.player.yaw -= 360.0
@@ -944,15 +1011,16 @@ proc frame() {.cdecl.} =
   
   sg.applyPipeline(state.pip)
   # Draw AI Cars
-  for ai in state.aiCars:
+  for i, ai in state.aiCars:
     let aiModel = translate(ai.position) * ai.rotation
-    drawVehicle(proj, view, aiModel, state.cameraPos)
+    # Give AI different models based on their index
+    let aiCarIdx = (i + 1) mod state.carMeshes.len
+    drawVehicle(proj, view, aiModel, state.cameraPos, aiCarIdx)
 
-  # Draw Player
-  if state.cameraMode == CameraMode.Follow or state.gameState == GameState.MainMenu:
+  # Draw Player / Preview
+  if state.cameraMode == CameraMode.Follow or state.gameState == GameState.MainMenu or state.gameState == GameState.CarSelection:
     let playerModel = translate(state.player.position) * state.player.rotation
-    # Removed the extra rotate(180) here because it was double-flipping the model relative to drawVehicle
-    drawVehicle(proj, view, playerModel, state.cameraPos)
+    drawVehicle(proj, view, playerModel, state.cameraPos, state.selectedCarIdx)
 
   sg.endPass()
   
@@ -982,6 +1050,49 @@ proc frame() {.cdecl.} =
       else:
         sdtx.color3f(0.5, 0.5, 0.5)
         sdtx.puts(&"  {item}")
+
+  elif state.gameState == GameState.CarSelection:
+    let uiX = 2.0f
+    let uiY = 4.0f
+    let currentCar = state.availableCars[state.selectedCarIdx]
+    
+    sdtx.pos(uiX, uiY)
+    sdtx.color3f(0.2, 0.8, 1.0)
+    sdtx.puts("SELECT YOUR VEHICLE")
+    
+    sdtx.pos(uiX, uiY + 3.0)
+    sdtx.color3f(1.0, 1.0, 1.0)
+    sdtx.puts(&"NAME: {currentCar.name}")
+    
+    # Stats Visualization
+    let stats = [
+      ("POWER", currentCar.engineForce / 40.0),
+      ("HANDLING", currentCar.turnTorque / 150.0),
+      ("MAX SPEED", currentCar.maxSpeed / 50.0),
+      ("GRIP", currentCar.baseGrip)
+    ]
+    
+    for i, stat in stats:
+      sdtx.pos(uiX, uiY + 6.0 + i.float * 1.5)
+      sdtx.color3f(0.7, 0.7, 0.7)
+      sdtx.puts(stat[0].cstring)
+      
+      let barLen = 10
+      let filled = int(stat[1] * barLen.float)
+      var barStr = ""
+      for b in 0..<barLen:
+        if b < filled: barStr.add("|")
+        else: barStr.add(".")
+      
+      sdtx.pos(uiX + 12.0, uiY + 6.0 + i.float * 1.5)
+      sdtx.color3f(1.0, 0.6, 0.0)
+      sdtx.puts(&"[{barStr}]")
+
+    sdtx.pos(uiX, uiY + 15.0)
+    sdtx.color3f(0.5, 0.5, 0.5)
+    sdtx.puts("A/D - CHANGE CAR")
+    sdtx.pos(uiX, uiY + 16.5)
+    sdtx.puts("ENTER - SELECT AND START")
 
   elif state.gameState == GameState.Paused:
     let menuX = 14.0f
@@ -1039,7 +1150,7 @@ proc frame() {.cdecl.} =
     sdtx.color3f(0.5, 0.5, 0.5)
     sdtx.puts("PRESS ENTER TO GO BACK")
 
-  if state.gameState != GameState.MainMenu and state.gameState != GameState.ControlsMenu:
+  if state.gameState == GameState.Playing or state.gameState == GameState.Paused:
     # --- TOP LEFT: MISSION CONTROL ---
     # Checkpoint progress bar
     sdtx.pos(1, 1)
@@ -1171,21 +1282,27 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
           setMusicVolume(getMusicVolume() - 0.1)
         elif state.menu.selectedItem == 3: # SFX VOLUME
           setSfxVolume(getSfxVolume() - 0.1)
+      elif state.gameState == GameState.CarSelection:
+        state.selectedCarIdx = (state.selectedCarIdx + state.availableCars.len - 1) mod state.availableCars.len
     of keyCodeD, keyCodeRight:
       if state.gameState == GameState.Paused:
         if state.menu.selectedItem == 2: # MUSIC VOLUME
           setMusicVolume(getMusicVolume() + 0.1)
         elif state.menu.selectedItem == 3: # SFX VOLUME
           setSfxVolume(getSfxVolume() + 0.1)
+      elif state.gameState == GameState.CarSelection:
+        state.selectedCarIdx = (state.selectedCarIdx + 1) mod state.availableCars.len
     of keyCodeEnter, keyCodeSpace:
       if state.gameState == GameState.MainMenu:
         case state.menu.selectedItem
-        of 0: state.gameState = GameState.Playing # START
+        of 0: state.gameState = GameState.CarSelection # GO TO CAR SELECTION
         of 1:
           state.previousGameState = state.gameState
           state.gameState = GameState.ControlsMenu # CONTROLS
         of 2: sapp.requestQuit() # QUIT
         else: discard
+      elif state.gameState == GameState.CarSelection:
+        state.gameState = GameState.Playing # START WITH SELECTED CAR
       elif state.gameState == GameState.Paused:
         case state.menu.selectedItem
         of 0: state.gameState = GameState.Playing # RESUME

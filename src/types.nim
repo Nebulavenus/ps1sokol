@@ -92,9 +92,26 @@ type
 
   GameState* = enum
     MainMenu,
+    CarSelection,
     Playing,
     Paused,
     ControlsMenu
+
+  CarConfig* = object
+    name*: string
+    modelPath*: string
+    texturePath*: string
+    # Physics
+    engineForce*: float32
+    brakeForce*: float32
+    maxSpeed*: float32
+    baseGrip*: float32
+    turnTorque*: float32
+    # Audio
+    baseIdlePitch*: float32
+    pitchMultiplier*: float32
+    maxRpm*: float32
+    gears*: int32
 
   PauseMenuState* = object
     selectedItem*: int
@@ -106,6 +123,10 @@ type
     gameState*: GameState
     previousGameState*: GameState # To return from sub-menus
     menu*: PauseMenuState
+    # Car Selection
+    availableCars*: seq[CarConfig]
+    carMeshes*: seq[seq[Mesh]] # Store loaded meshes (parts) for each config
+    selectedCarIdx*: int
     # Asset Management
     res*: ResourceManager
     # Rendering
