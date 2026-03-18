@@ -120,7 +120,7 @@ proc init() {.cdecl.} =
 
   state.aiCount = 3
   state.aiDifficulty = Difficulty.Medium
-  state.gameMode = GameMode.StandardRace
+  state.gameMode = GameMode.TofuDelivery
   state.tofuIntegrity = 1.0
   state.raceFinished = false
 

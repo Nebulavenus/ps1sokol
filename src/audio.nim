@@ -10,7 +10,7 @@ import std/os
 import rtfs, qoa, types
 
 const
-  DEFAULT_MUSIC_VOLUME = 1.0 # Default music volume (0.0 to 1.0)
+  DEFAULT_MUSIC_VOLUME = 0.7 # Default music volume (0.0 to 1.0)
   SAUDIO_SAMPLE_RATE = 44100.0   # Standard sample rate
   SAUDIO_NUM_SAMPLES = 4096       # Increased buffer size to prevent crackling
 
@@ -110,7 +110,7 @@ proc audioInit*() =
   audioState.musicPlaying = false
   audioState.musicPosition = 0
   audioState.musicVolume = DEFAULT_MUSIC_VOLUME
-  audioState.sfxVolume = 1.0
+  audioState.sfxVolume = 0.7
 
 proc audioShutdown*() =
   saudio.shutdown()

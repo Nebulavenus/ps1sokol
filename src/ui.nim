@@ -188,49 +188,50 @@ proc drawUI*(state: var State, proj, view: Mat4, canvasW, canvasH: float32) =
     sdtx.pos(1, 5)
     sdtx.puts(&"BEST {state.bestLapTime:5.2f}")
 
+    let hudY = gridH - 6.0
     if state.gameMode == GameMode.TofuDelivery:
-      sdtx.pos(1, 7)
+      sdtx.pos(1, hudY)
       sdtx.color3f(1.0, 1.0, 1.0)
       sdtx.puts(">> TOFU INTEGRITY")
       
       let integrity = state.tofuIntegrity
-      let barLen = 20
+      let barLen = 10
       let filled = int(integrity * barLen.float)
       var barStr = ""
       for b in 0..<barLen:
         if b < filled: barStr.add("|")
         else: barStr.add(".")
       
-      sdtx.pos(1, 8)
+      sdtx.pos(1, hudY + 1)
       if integrity > 0.5: sdtx.color3f(0.2, 1.0, 0.4)
       elif integrity > 0.2: sdtx.color3f(1.0, 1.0, 0.0)
       else: sdtx.color3f(1.0, 0.0, 0.0)
       sdtx.puts(&"[{barStr}] {integrity*100:3.0f}%")
 
-      # NITRO HUD
-      sdtx.pos(1, 10)
-      sdtx.color3f(0.0, 0.8, 1.0)
-      sdtx.puts(">> NITRO")
-      let nitro = state.boostAmount
-      let nBarLen = 15
-      let nFilled = int(nitro * nBarLen.float)
-      var nBarStr = ""
-      for b in 0..<nBarLen:
-        if b < nFilled: nBarStr.add("!")
-        else: nBarStr.add(".")
-      sdtx.pos(1, 11)
-      if state.isBoosting: sdtx.color3f(1.0, 1.0, 1.0)
-      else: sdtx.color3f(0.0, 0.6, 0.8)
-      sdtx.puts(&"[{nBarStr}] {nitro*100:3.0f}%")
-
       if state.raceFinished:
-        sdtx.pos(10, 12)
+        sdtx.pos(10, gridH / 2.0)
         sdtx.color3f(0.0, 1.0, 0.0)
         sdtx.puts("DELIVERY COMPLETE!")
       elif state.tofuIntegrity <= 0.0:
-        sdtx.pos(10, 12)
+        sdtx.pos(10, gridH / 2.0)
         sdtx.color3f(1.0, 0.0, 0.0)
         sdtx.puts("DELIVERY FAILED - TOFU SMASHED!")
+
+    # NITRO HUD (Always shown)
+    sdtx.pos(1, hudY + 3)
+    sdtx.color3f(0.0, 0.8, 1.0)
+    sdtx.puts(">> NITRO")
+    let nitro = state.boostAmount
+    let nBarLen = 10
+    let nFilled = int(nitro * nBarLen.float)
+    var nBarStr = ""
+    for b in 0..<nBarLen:
+      if b < nFilled: nBarStr.add("!")
+      else: nBarStr.add(".")
+    sdtx.pos(1, hudY + 4)
+    if state.isBoosting: sdtx.color3f(1.0, 1.0, 1.0)
+    else: sdtx.color3f(0.0, 0.6, 0.8)
+    sdtx.puts(&"[{nBarStr}] {nitro*100:3.0f}%")
 
     let audioX = gridW - 16.0
     sdtx.pos(audioX, 2)
