@@ -6,30 +6,6 @@ import options
 import sokol/app as sapp
 import aobaker
 
-proc updateCamera*(state: var State, dt: float32) =
-  var desiredPos: Vec3
-  var desiredTarget: Vec3
-  var followSpeed: float32 = 5.0
-
-  case state.cameraMode
-  of CameraMode.Follow:
-    let camOffset = vec3(0.0, state.cameraOffsetY, 8.0)
-    let targetOffset = vec3(0.0, 1.0, 0.0)
-    desiredPos = state.player.position + (state.player.rotation * camOffset)
-    desiredTarget = state.player.position + (state.player.rotation * targetOffset)
-    followSpeed = 5.0
-  of CameraMode.Front:
-    # Bumper/Hood cam: slightly in front of the car, looking forward
-    let camOffset = vec3(0.0, 0.8, -0.5) # Hood position
-    let targetOffset = vec3(0.0, 0.6, -10.0) # Look way ahead
-    desiredPos = state.player.position + (state.player.rotation * camOffset)
-    desiredTarget = state.player.position + (state.player.rotation * targetOffset)
-    followSpeed = 20.0 # Faster follow for first-person feel
-
-  let t = clamp(dt * followSpeed, 0.0, 1.0)
-  state.cameraPos = vec3.lerpV(state.cameraPos, desiredPos, t)
-  state.cameraTarget = vec3.lerpV(state.cameraTarget, desiredTarget, t)
-
 proc getSurfaceInfo*(state: State, carPos: Vec3): Option[SurfaceHit] =
   let rayOrigin = carPos + vec3(0, 1.0, 0)
   let rayDir = vec3(0, -1.0, 0)
