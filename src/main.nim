@@ -666,8 +666,9 @@ proc init() {.cdecl.} =
   let truenoTex = loadTexture(state, ASSETS_FS, "car"/"trueno.qoi")
   var truenoMeshes: seq[Mesh]
   truenoMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno.ply", aoParams, truenoTex, pointSmp)
-  truenoMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_back.ply", aoParams, truenoTex, pointSmp)
-  truenoMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_front.ply", aoParams, truenoTex, pointSmp)
+  # Multi mesh loading example (was used previously)
+  #truenoMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_back.ply", aoParams, truenoTex, pointSmp)
+  #truenoMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"trueno_front.ply", aoParams, truenoTex, pointSmp)
   state.carMeshes.add(truenoMeshes)
 
   # 2. SILVIA
@@ -1101,7 +1102,7 @@ proc frame() {.cdecl.} =
     sdtx.color3f(1.0, 1.0, 0.0)
     sdtx.puts("=== PAUSED ===")
     
-    let items = ["RESUME", "RESTART", "MUSIC VOL", "SFX VOL", "CONTROLS", "QUIT"]
+    let items = ["RESUME", "RESTART", "MAIN MENU", "MUSIC VOL", "SFX VOL", "CONTROLS", "QUIT"]
     for i, item in items:
       sdtx.pos(menuX, menuY + i.float * 2.0)
       if i == state.menu.selectedItem:
@@ -1110,12 +1111,11 @@ proc frame() {.cdecl.} =
       else:
         sdtx.color3f(0.5, 0.5, 0.5)
         sdtx.puts(&"  {item}")
-      
+
       if item == "MUSIC VOL":
         sdtx.puts(&" {getMusicVolume()*100:3.0f}%")
       elif item == "SFX VOL":
         sdtx.puts(&" {getSfxVolume()*100:3.0f}%")
-
   elif state.gameState == GameState.ControlsMenu:
     let menuX = 4.0f
     let menuY = 4.0f
@@ -1267,9 +1267,15 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
       if state.gameState == GameState.Playing:
         state.gameState = GameState.Paused
         state.menu.selectedItem = 0
-        state.menu.itemCount = 6 # RESUME, RESTART, MUSIC, SFX, CONTROLS, QUIT
-      elif state.gameState == GameState.Paused or state.gameState == GameState.ControlsMenu:
+        state.menu.itemCount = 7 # RESUME, RESTART, MAIN MENU, MUSIC, SFX, CONTROLS, QUIT
+      elif state.gameState == GameState.Paused:
         state.gameState = GameState.Playing
+      elif state.gameState == GameState.CarSelection:
+        state.gameState = GameState.MainMenu
+        state.menu.selectedItem = 0
+        state.menu.itemCount = 3 # START, CONTROLS, QUIT
+      elif state.gameState == GameState.ControlsMenu:
+        state.gameState = state.previousGameState
     of keyCodeW, keyCodeUp:
       if state.gameState == GameState.Paused or state.gameState == GameState.MainMenu:
         state.menu.selectedItem = (state.menu.selectedItem + state.menu.itemCount - 1) mod state.menu.itemCount
@@ -1278,17 +1284,17 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
         state.menu.selectedItem = (state.menu.selectedItem + 1) mod state.menu.itemCount
     of keyCodeA, keyCodeLeft:
       if state.gameState == GameState.Paused:
-        if state.menu.selectedItem == 2: # MUSIC VOLUME
+        if state.menu.selectedItem == 3: # MUSIC VOLUME
           setMusicVolume(getMusicVolume() - 0.1)
-        elif state.menu.selectedItem == 3: # SFX VOLUME
+        elif state.menu.selectedItem == 4: # SFX VOLUME
           setSfxVolume(getSfxVolume() - 0.1)
       elif state.gameState == GameState.CarSelection:
         state.selectedCarIdx = (state.selectedCarIdx + state.availableCars.len - 1) mod state.availableCars.len
     of keyCodeD, keyCodeRight:
       if state.gameState == GameState.Paused:
-        if state.menu.selectedItem == 2: # MUSIC VOLUME
+        if state.menu.selectedItem == 3: # MUSIC VOLUME
           setMusicVolume(getMusicVolume() + 0.1)
-        elif state.menu.selectedItem == 3: # SFX VOLUME
+        elif state.menu.selectedItem == 4: # SFX VOLUME
           setSfxVolume(getSfxVolume() + 0.1)
       elif state.gameState == GameState.CarSelection:
         state.selectedCarIdx = (state.selectedCarIdx + 1) mod state.availableCars.len
@@ -1303,17 +1309,23 @@ proc event(e: ptr sapp.Event) {.cdecl.} =
         else: discard
       elif state.gameState == GameState.CarSelection:
         state.gameState = GameState.Playing # START WITH SELECTED CAR
+        restartLevel(state)
       elif state.gameState == GameState.Paused:
         case state.menu.selectedItem
         of 0: state.gameState = GameState.Playing # RESUME
         of 1: # RESTART
           restartLevel(state)
           state.gameState = GameState.Playing
-        of 2, 3: discard # VOLUME (handled by left/right)
-        of 4:
+        of 2: # MAIN MENU
+          state.gameState = GameState.MainMenu
+          state.menu.selectedItem = 0
+          state.menu.itemCount = 3 # START, CONTROLS, QUIT
+          restartLevel(state)
+        of 3, 4: discard # VOLUME (handled by left/right)
+        of 5: # CONTROLS
           state.previousGameState = state.gameState
-          state.gameState = GameState.ControlsMenu # CONTROLS
-        of 5: sapp.requestQuit() # QUIT
+          state.gameState = GameState.ControlsMenu
+        of 6: sapp.requestQuit() # QUIT
         else: discard
       elif state.gameState == GameState.ControlsMenu:
         state.gameState = state.previousGameState # Go back to menu
