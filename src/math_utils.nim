@@ -2,6 +2,9 @@ import math/vec2
 import math/vec3
 import std/random
 
+proc lerp*(a, b: float32, t: float32): float32 {.inline.} =
+  return a + (b - a) * t
+
 proc vec2ToShort2N*(v: Vec2): (int16, int16) =
   ## Converts a Vec2 float [0.0, 1.0] to two int16s for use with SHORT2N.
   let clampedX = clamp(v.x, 0.0, 1.0)

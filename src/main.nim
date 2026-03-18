@@ -115,13 +115,13 @@ proc init() {.cdecl.} =
   ladaMeshes.add loadAndProcessMesh(state, ASSETS_FS, "car"/"lada.ply", aoParams, ladaTex, pointSmp)
   state.carMeshes.add(ladaMeshes)
   
-  loadLevel(state, ASSETS_FS, "map2")
-  
-  state.cameraMode = CameraMode.Follow
-  state.cameraPos = vec3(0.0, 10.0, 2.0)
-  state.cameraOffsetY = 5.0
   state.cameraTarget = state.player.position
   state.lastEmitPos = state.player.position
+
+  state.aiCount = 3
+  state.aiDifficulty = Difficulty.Medium
+
+  loadLevel(state, ASSETS_FS, "map2")
 
   state.gameState = GameState.MainMenu
   state.menu.selectedItem = 0

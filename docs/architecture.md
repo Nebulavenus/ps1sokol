@@ -34,19 +34,19 @@ To add depth without expensive real-time lighting, the engine pre-calculates AO 
 
 ### Core Loop & App
 - **`src/main.nim`**: The entry point. Handles the Sokol lifecycle (`init`, `frame`, `cleanup`).
-- **`src/events.nim`**: Manages all input (Keyboard/Mouse) and high-level state transitions (Menu <-> Playing).
+- **`src/events.nim`**: Manages all input (Keyboard/Mouse) and high-level state transitions (Menu <-> CarSelection <-> RaceSetup <-> Playing).
 - **`src/types.nim`**: Defines global state, vehicle structures, and shared types.
 
 ### Graphics & Level
 - **`src/renderer.nim`**: Manages Sokol pipelines, render passes (Offscreen for Post-FX), and 3D drawing procedures.
 - **`src/ui.nim`**: Renders the HUD and menus using `sokol-debugtext`.
-- **`src/level.nim`**: Coordinates track loading and environment setup.
+- **`src/level.nim`**: Coordinates track loading, path extraction, and bot spawning.
 - **`src/mesh_loader.nim`**: Custom PLY and OBJ parsers that integrate with the AO baker.
 - **`src/particles.nim`**: A simple distance-sorted particle system for smoke and exhaust effects.
 
 ### Simulation & Utilities
-- **`src/ai.nim`**: Basic path-following logic for opponent vehicles.
-- **`src/camera.nim`**: Manages smooth follow camera and front-facing view modes.
+- **`src/ai.nim`**: Advanced path-following logic for opponent vehicles, including curvature-based speed control and varied performance traits.
+- **`src/camera.nim`**: Manages smooth follow camera and hood-mounted front view.
 - **`src/rtfs.nim` & `src/embedfs.nim`**: Abstraction layers for asset loading, supporting both local filesystem and embedded resources.
 - **`src/math_utils.nim`**: Shared mathematical primitives and intersection helpers.
 

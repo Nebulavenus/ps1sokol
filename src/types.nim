@@ -65,6 +65,7 @@ type
     lapCount*: int
     difficulty*: Difficulty
     name*: string
+    speedMultiplier*: float32
 
   Checkpoint* = object
     pos*: Vec3
@@ -93,6 +94,7 @@ type
   GameState* = enum
     MainMenu,
     CarSelection,
+    RaceSetup,
     Playing,
     Paused,
     ControlsMenu
@@ -198,6 +200,9 @@ type
     skyLightIntensity*: float32
     groundLightColor*: Vec3
     groundLightIntensity*: float32
+    # Race Setup
+    aiCount*: int
+    aiDifficulty*: Difficulty
 
   SurfaceHit* = object
     pos*: Vec3

@@ -34,13 +34,17 @@ proc event*(e: ptr sapp.Event, state: var State) =
         state.gameState = GameState.MainMenu
         state.menu.selectedItem = 0
         state.menu.itemCount = 3 # START, CONTROLS, QUIT
+      elif state.gameState == GameState.RaceSetup:
+        state.gameState = GameState.CarSelection
+        state.menu.selectedItem = 0
+        state.menu.itemCount = 0 # Not used for car selection grid but mod handles it
       elif state.gameState == GameState.ControlsMenu:
         state.gameState = state.previousGameState
     of keyCodeW, keyCodeUp:
-      if state.gameState == GameState.Paused or state.gameState == GameState.MainMenu:
+      if state.gameState == GameState.Paused or state.gameState == GameState.MainMenu or state.gameState == GameState.RaceSetup:
         state.menu.selectedItem = (state.menu.selectedItem + state.menu.itemCount - 1) mod state.menu.itemCount
     of keyCodeS, keyCodeDown:
-      if state.gameState == GameState.Paused or state.gameState == GameState.MainMenu:
+      if state.gameState == GameState.Paused or state.gameState == GameState.MainMenu or state.gameState == GameState.RaceSetup:
         state.menu.selectedItem = (state.menu.selectedItem + 1) mod state.menu.itemCount
     of keyCodeA, keyCodeLeft:
       if state.gameState == GameState.Paused:
@@ -50,6 +54,12 @@ proc event*(e: ptr sapp.Event, state: var State) =
           setSfxVolume(getSfxVolume() - 0.1)
       elif state.gameState == GameState.CarSelection:
         state.selectedCarIdx = (state.selectedCarIdx + state.availableCars.len - 1) mod state.availableCars.len
+      elif state.gameState == GameState.RaceSetup:
+        if state.menu.selectedItem == 0: # OPPONENTS
+          state.aiCount = max(0, state.aiCount - 1)
+        elif state.menu.selectedItem == 1: # DIFFICULTY
+          if state.aiDifficulty == Difficulty.Medium: state.aiDifficulty = Difficulty.Easy
+          elif state.aiDifficulty == Difficulty.Hard: state.aiDifficulty = Difficulty.Medium
     of keyCodeD, keyCodeRight:
       if state.gameState == GameState.Paused:
         if state.menu.selectedItem == 3: # MUSIC VOLUME
@@ -58,6 +68,12 @@ proc event*(e: ptr sapp.Event, state: var State) =
           setSfxVolume(getSfxVolume() + 0.1)
       elif state.gameState == GameState.CarSelection:
         state.selectedCarIdx = (state.selectedCarIdx + 1) mod state.availableCars.len
+      elif state.gameState == GameState.RaceSetup:
+        if state.menu.selectedItem == 0: # OPPONENTS
+          state.aiCount = min(10, state.aiCount + 1)
+        elif state.menu.selectedItem == 1: # DIFFICULTY
+          if state.aiDifficulty == Difficulty.Easy: state.aiDifficulty = Difficulty.Medium
+          elif state.aiDifficulty == Difficulty.Medium: state.aiDifficulty = Difficulty.Hard
     of keyCodeEnter, keyCodeSpace:
       if state.gameState == GameState.MainMenu:
         case state.menu.selectedItem
@@ -68,8 +84,13 @@ proc event*(e: ptr sapp.Event, state: var State) =
         of 2: sapp.requestQuit() # QUIT
         else: discard
       elif state.gameState == GameState.CarSelection:
-        state.gameState = GameState.Playing # START WITH SELECTED CAR
-        restartLevel(state)
+        state.gameState = GameState.RaceSetup
+        state.menu.selectedItem = 0
+        state.menu.itemCount = 3 # OPPONENTS, DIFFICULTY, START
+      elif state.gameState == GameState.RaceSetup:
+        if state.menu.selectedItem == 2: # START RACE
+          state.gameState = GameState.Playing
+          restartLevel(state)
       elif state.gameState == GameState.Paused:
         case state.menu.selectedItem
         of 0: state.gameState = GameState.Playing # RESUME

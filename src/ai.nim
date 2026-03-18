@@ -4,6 +4,7 @@ import math/mat4
 import types
 import physics
 import options
+import math_utils
 
 proc updateAI*(state: var State, dt: float32) =
   for i in 0 ..< state.aiCars.len:
@@ -18,6 +19,16 @@ proc updateAI*(state: var State, dt: float32) =
     let dir = norm(toTarget)
     let desiredYaw = (arctan2(dir.x, dir.z) + PI) * (180.0 / PI)
     
+    # Calculate curvature for slowdown
+    var curvatureSlowdown = 1.0f
+    if state.pathNodes.len > 2:
+      let nextNodeIdx = (ai.targetNode + 1) mod state.pathNodes.len
+      let nextTargetPos = state.pathNodes[nextNodeIdx]
+      let toNext = norm(nextTargetPos - targetPos)
+      let turnAngle = abs(arccos(clamp(dot(dir, toNext), -1.0, 1.0)))
+      # If angle is large (sharp turn), reduce speed
+      curvatureSlowdown = lerp(1.0f, 0.4f, clamp(turnAngle / (PI/2.0), 0.0, 1.0))
+
     # Smoothly rotate towards target
     var diff = desiredYaw - ai.yaw
     while diff > 180.0: diff -= 360.0
@@ -25,25 +36,26 @@ proc updateAI*(state: var State, dt: float32) =
     
     # Difficulty parameters
     var turnSpeed = 2.0f
-    var moveSpeed = 20.0f
+    var baseMoveSpeed = 20.0f
     case ai.difficulty
     of Difficulty.Easy:
       turnSpeed = 1.0f
-      moveSpeed = 15.0f
+      baseMoveSpeed = 15.0f
     of Difficulty.Medium:
       turnSpeed = 2.5f
-      moveSpeed = 22.0f
+      baseMoveSpeed = 22.0f
     of Difficulty.Hard:
       turnSpeed = 4.5f
-      moveSpeed = 30.0f
+      baseMoveSpeed = 30.0f
 
+    let finalMoveSpeed = baseMoveSpeed * ai.speedMultiplier * curvatureSlowdown
     ai.yaw += diff * dt * turnSpeed
     
     ai.rotation = rotate(ai.yaw, vec3(0, 1, 0))
     let forward = ai.rotation * vec3(0, 0, -1)
     
     # Simple movement
-    ai.position += forward * moveSpeed * dt
+    ai.position += forward * finalMoveSpeed * dt
     
     # Surface alignment
     let groundInfo = getSurfaceInfo(state, ai.position)

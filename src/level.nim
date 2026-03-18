@@ -7,6 +7,7 @@ import rtfs
 import mesh_loader
 import sokol/gfx as sg
 import std/strformat
+import std/random
 import physics
 import aobaker
 
@@ -100,6 +101,43 @@ proc extractPathFromRoadMesh*(vertices: seq[Vertex], indices: seq[uint16]): seq[
 
   return sortedNodes
 
+const BOT_NAMES = [
+  "TAKUMI", "KEISUKE", "RYOSUKE", "BUNTA", "IKETANI",
+  "KENJI", "SHINGO", "MAKO", "SAYUKI", "KENTA",
+  "SUDO", "SEIJI", "SAKAI", "KAWAI", "TOMO"
+]
+
+proc initBots*(state: var State) =
+  state.aiCars = @[]
+  if state.pathNodes.len > 10:
+    for i in 0 ..< state.aiCount:
+      var ai: AIVehicle
+      # Start bots slightly behind or ahead of player spawn
+      let startIdx = (i + 1) * 4
+      if startIdx >= state.pathNodes.len: break
+      
+      ai.position = state.pathNodes[startIdx] + vec3(0, 1, 0)
+      ai.targetNode = (startIdx + 1) mod state.pathNodes.len
+      let toTarget = norm(state.pathNodes[ai.targetNode] - ai.position)
+      ai.yaw = (arctan2(toTarget.x, toTarget.z) + PI) * (180.0 / PI)
+      ai.rotation = rotate(ai.yaw, vec3(0, 1, 0))
+      
+      # Vary difficulty around global setting
+      let variation = rand(-1..1)
+      var botDiff = state.aiDifficulty
+      if variation == -1:
+        if botDiff == Difficulty.Medium: botDiff = Difficulty.Easy
+        elif botDiff == Difficulty.Hard: botDiff = Difficulty.Medium
+      elif variation == 1:
+        if botDiff == Difficulty.Easy: botDiff = Difficulty.Medium
+        elif botDiff == Difficulty.Medium: botDiff = Difficulty.Hard
+      
+      ai.difficulty = botDiff
+      ai.speedMultiplier = 0.9f + rand(0.2f) # 0.9 to 1.1 multiplier
+      ai.name = if i < BOT_NAMES.len: BOT_NAMES[i] else: &"BOT {i+1}"
+      state.aiCars.add(ai)
+  echo &"Spawned {state.aiCars.len} bots"
+
 proc restartLevel*(state: var State) =
   if state.gameState == GameState.MainMenu:
     state.player.position = vec3(0.0, 12, 25.0)
@@ -121,6 +159,10 @@ proc restartLevel*(state: var State) =
   state.lastLapTime = 0.0
   state.replayBuffer = @[]
   state.isReplaying = false
+
+  if state.gameState == GameState.Playing:
+    initBots(state)
+
   echo "Level Restarted"
 
 proc loadLevel*(state: var State, fs: var RuntimeFS, mapDir: string) =
@@ -151,24 +193,5 @@ proc loadLevel*(state: var State, fs: var RuntimeFS, mapDir: string) =
   state.checkpoints = @[]
   for i in countup(0, state.pathNodes.len - 1, 4):
     state.checkpoints.add(Checkpoint(pos: state.pathNodes[i], radius: 18.0))
-
-  state.aiCars = @[]
-  if state.pathNodes.len > 10:
-    let botConfigs = [
-      (name: "BOB", diff: Difficulty.Easy),
-      (name: "KEVIN", diff: Difficulty.Medium),
-      (name: "TAKUMI", diff: Difficulty.Hard)
-    ]
-    for i, config in botConfigs:
-      var ai: AIVehicle
-      let startIdx = (i + 1) * 2
-      ai.position = state.pathNodes[startIdx] + vec3(0, 1, 0)
-      ai.targetNode = (startIdx + 1) mod state.pathNodes.len
-      let toTarget = norm(state.pathNodes[ai.targetNode] - ai.position)
-      ai.yaw = (arctan2(toTarget.x, toTarget.z) + PI) * (180.0 / PI)
-      ai.rotation = rotate(ai.yaw, vec3(0, 1, 0))
-      ai.difficulty = config.diff
-      ai.name = config.name
-      state.aiCars.add(ai)
 
   restartLevel(state)

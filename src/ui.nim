@@ -69,7 +69,35 @@ proc drawUI*(state: var State, proj, view: Mat4, canvasW, canvasH: float32) =
     sdtx.color3f(0.5, 0.5, 0.5)
     sdtx.puts("A/D - CHANGE CAR")
     sdtx.pos(uiX, uiY + 16.5)
-    sdtx.puts("ENTER - SELECT AND START")
+    sdtx.puts("ENTER - SELECT AND SETUP RACE")
+
+  elif state.gameState == GameState.RaceSetup:
+    let uiX = 2.0f
+    let uiY = 4.0f
+    sdtx.pos(uiX, uiY)
+    sdtx.color3f(0.2, 0.8, 1.0)
+    sdtx.puts("RACE SETUP")
+
+    let items = [
+      &"OPPONENTS: {state.aiCount}",
+      &"DIFFICULTY: {state.aiDifficulty}",
+      "START RACE"
+    ]
+
+    for i, item in items:
+      sdtx.pos(uiX, uiY + 4.0 + i.float * 2.0)
+      if i == state.menu.selectedItem:
+        sdtx.color3f(1.0, 1.0, 1.0)
+        sdtx.puts(&"> {item}")
+      else:
+        sdtx.color3f(0.5, 0.5, 0.5)
+        sdtx.puts(&"  {item}")
+
+    sdtx.pos(uiX, uiY + 15.0)
+    sdtx.color3f(0.5, 0.5, 0.5)
+    sdtx.puts("A/D - ADJUST VALUES")
+    sdtx.pos(uiX, uiY + 16.5)
+    sdtx.puts("ESC - BACK TO CAR SELECTION")
 
   elif state.gameState == GameState.Paused:
     let menuX = 14.0f
